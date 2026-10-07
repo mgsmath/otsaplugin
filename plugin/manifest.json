@@ -1,9 +1,9 @@
 {
   "schemaVersion": 1,
   "id": "org.sefaria.otzaria-english",
-  "name": "תרגום אנגלית",
-  "version": "1.0.0",
-  "description": "English translations from Sefaria for whatever you are reading in Otzaria. Six view modes, fully offline, per-passage source attribution.",
+  "name": "English for Otzaria",
+  "version": "1.1.0",
+  "description": "Offline English translations for texts in Otzaria, with reader-follow and side-by-side views.",
   "author": "otsaplugin contributors",
   "homepage": "https://github.com/mgsmath/otsaplugin",
   "entrypoint": "index.html",
@@ -17,7 +17,6 @@
     "reader.open",
     "library.books.read",
     "fs.user_files.read",
-    "app.open_url",
     "events.subscribe:reader.current_ref_changed"
   ],
   "network": {
@@ -26,7 +25,7 @@
   },
   "contributes": {
     "toolTab": {
-      "title": "תרגום אנגלית",
+      "title": "English",
       "order": 320,
       "defaultPinned": true,
       "iconName": "book_24_regular"
@@ -36,10 +35,18 @@
         {
           "id": "english-translation",
           "type": "item",
-          "title": "תרגום לאנגלית",
+          "title": "Translate selected passage",
           "icon": "fluent:translate_24_regular",
           "openPlugin": true,
           "param": "peek"
+        },
+        {
+          "id": "english-translation-split",
+          "type": "item",
+          "title": "Translate side by side",
+          "icon": "fluent:panel-left_24_regular",
+          "openPlugin": true,
+          "param": "split"
         }
       ]
     },

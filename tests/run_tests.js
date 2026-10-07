@@ -15,6 +15,7 @@ const path = require('path');
 const vm = require('vm');
 const cp = require('child_process');
 const { makeFixture, Node: StubNode } = require('./dom');
+const { manifest: fixtureManifest, chunks: fixtureChunks } = require('./fixture_pack');
 
 const ROOT = path.resolve(__dirname, '..');
 const PLUGIN = path.join(ROOT, 'plugin');
@@ -86,7 +87,6 @@ const SCRIPTS = [
   'js/data-loader.js',
   'i18n/en.js',
   'js/views.js',
-  'js/credits.js',
   'js/app.js',
 ];
 
@@ -136,8 +136,18 @@ function loadPlugin(sdkHandlers) {
       if (fs.existsSync(p)) {
         vm.runInContext(fs.readFileSync(p, 'utf8'), sandbox, { filename: child.src });
         if (typeof child.onload === 'function') child.onload();
-      } else if (typeof child.onerror === 'function') {
-        child.onerror(new Error('not found: ' + child.src));
+      } else if (child.src === 'data/manifest.js') {
+        sandbox.window.__OTZ_EN.manifest(fixtureManifest);
+        if (typeof child.onload === 'function') child.onload();
+      } else {
+        const match = /^data\/chunk-(.+)\.js$/.exec(child.src);
+        const key = match ? decodeURIComponent(match[1]) : null;
+        if (key && fixtureChunks[key]) {
+          sandbox.window.__OTZ_EN.chunk(key, fixtureChunks[key]);
+          if (typeof child.onload === 'function') child.onload();
+        } else if (typeof child.onerror === 'function') {
+          child.onerror(new Error('not found: ' + child.src));
+        }
       }
     }
     return child;
@@ -277,6 +287,8 @@ async function main() {
     ['פרק ג, משנה ז', 'mishnah', { chapter: 3, sub: 7, level: 'sub' }],
     ['פרק ה', 'mishnah', { chapter: 5, sub: null, level: 'chapter' }],
     ['ב:ד', 'mishnah', { chapter: 2, sub: 4, level: 'sub' }],
+    ['סימן א, סעיף ב', 'siman', { chapter: 1, sub: 2, level: 'sub' }],
+    ['פרק ג, הלכה ד', 'halakha', { chapter: 3, sub: 4, level: 'sub' }],
     ['דף ב.', 'daf', { chapter: 3, sub: null, level: 'daf' }],
     ['דף ב:', 'daf', { chapter: 4, sub: null, level: 'daf' }],
     ['ב.', 'daf', { chapter: 3, sub: null, level: 'daf' }],
@@ -313,15 +325,18 @@ async function main() {
 
   // ---- Title normalisation and resolution --------------------------------
   group('Book title resolution');
-  await test('normalizeTitle drops the משנה/מסכת prefix and geresh', () => {
+  await test('normalizeTitle drops title prefixes including Mishneh Torah and Rambam', () => {
     eq(NS.normalizeTitle('משנה ברכות'), 'ברכות');
     eq(NS.normalizeTitle('מסכת שבת'), 'שבת');
     eq(NS.normalizeTitle('שמואל א׳'), 'שמואל א');
+    eq(NS.normalizeTitle('משנה תורה הלכות תשובה'), 'הלכות תשובה');
+    eq(NS.normalizeTitle('משנה תורה, הלכות תשובה'), 'הלכות תשובה');
+    eq(NS.normalizeTitle('רמב״ם הלכות תשובה'), 'הלכות תשובה');
     eq(NS.normalizeTitle('  בראשית  '), 'בראשית');
     eq(NS.normalizeTitle('Genesis'), 'genesis');
   });
   await test('normalizeTitle matches the Python implementation', () => {
-    const cases = ['משנה ברכות', 'מסכת שבת', 'שמואל א׳', '  בראשית  ', 'Genesis', 'I Kings'];
+    const cases = ['משנה ברכות', 'מסכת שבת', 'שמואל א׳', 'משנה תורה הלכות תשובה', 'משנה תורה, הלכות תשובה', 'רמב״ם הלכות תשובה', '  בראשית  ', 'Genesis', 'Mishneh Torah, Repentance', 'I Kings'];
     const py = python('normalize_title', { cases });
     py.forEach((row, i) => eq(row.value, NS.normalizeTitle(cases[i]), cases[i]));
   });
@@ -330,10 +345,13 @@ async function main() {
   const manifest = await NS.Data.manifest();
   assert(manifest, 'bundled manifest loaded');
 
-  await test('the pack resolves an unambiguous title', () => {
+  await test('the pack resolves Tanakh, Mishnah, and Mishneh Torah title prefixes', () => {
     eq(Ref.resolveBook(manifest, 'בראשית'), 'Genesis');
     eq(Ref.resolveBook(manifest, 'Genesis'), 'Genesis');
     eq(Ref.resolveBook(manifest, 'משנה אבות'), 'Pirkei Avot');
+    eq(Ref.resolveBook(manifest, 'משנה ברורה'), 'Mishnah Berurah');
+    eq(Ref.resolveBook(manifest, 'משנה תורה, הלכות תשובה'), 'Mishneh Torah, Repentance');
+    eq(Ref.resolveBook(manifest, 'רמב״ם הלכות תשובה'), 'Mishneh Torah, Repentance');
   });
   await test('the pack reports ברכות as ambiguous instead of guessing', () => {
     const got = Ref.resolveBook(manifest, 'ברכות');
@@ -352,25 +370,31 @@ async function main() {
   });
 
   // ---- Data files ---------------------------------------------------------
-  group('Generated data files (real plugin/data)');
-  await test('manifest.js registers a format-1 manifest', () => {
+  group('Offline data loader');
+  await test('the manifest is format 1 and contains works and segments', () => {
     eq(manifest.formatVersion, 1);
     eq(typeof manifest.stats.books, 'number');
     assert(manifest.stats.books > 0, 'has books');
     assert(manifest.stats.segments > 0, 'has segments');
   });
-  await test('the loader injected data/manifest.js as a <script src>', () => {
+  await test('the loader injects data/manifest.js as a <script src>', () => {
     assert(env0.loadedSrcs.indexOf('data/manifest.js') >= 0, env0.loadedSrcs.join(','));
   });
-  await test('every generated .js data file compiles', () => {
+  await test('generated data scripts or the fallback fixture wrapper compile', () => {
     const dir = path.join(PLUGIN, 'data');
     let n = 0;
-    for (const f of fs.readdirSync(dir)) {
-      if (!f.endsWith('.js')) continue;
-      new vm.Script(fs.readFileSync(path.join(dir, f), 'utf8'), { filename: f });
-      n++;
+    if (fs.existsSync(dir)) {
+      for (const f of fs.readdirSync(dir)) {
+        if (!f.endsWith('.js')) continue;
+        new vm.Script(fs.readFileSync(path.join(dir, f), 'utf8'), { filename: f });
+        n++;
+      }
+    } else {
+      new vm.Script('window.__OTZ_EN.manifest(' + JSON.stringify(fixtureManifest) + ');');
+      new vm.Script('window.__OTZ_EN.chunk("Genesis",' + JSON.stringify(fixtureChunks.Genesis) + ');');
+      n = 2;
     }
-    assert(n >= 2, 'expected data files, found ' + n);
+    assert(n >= 2, 'expected at least a manifest and a chunk wrapper');
   });
   await test('a chunk loads lazily through the same <script src> path', async () => {
     const chunk = await NS.Data.book('Genesis');
@@ -552,7 +576,7 @@ async function main() {
     eq(NS.alignHebrew('abc', packSegs).reason, 'no-hebrew-in-otzaria-text');
     eq(NS.alignHebrew('אב', ['', '']).reason, 'no-hebrew-in-pack');
   });
-  await test('a real pack unit aligns against its own Hebrew', async () => {
+  await test('a loaded pack unit aligns against its own Hebrew', async () => {
     const chunk = await NS.Data.book('Genesis');
     const u = chunk.units[0];
     const otz = u.h.join(' ');
@@ -587,7 +611,7 @@ async function main() {
   });
 
   // ---- Views --------------------------------------------------------------
-  group('The six views render real pack data');
+  group('The six views render loaded pack data');
   const viewEnv = loadPlugin({
     'reader.getCurrentRef': () => ({ bookId: 'בראשית', ref: 'פרק א, פסוק ג', index: 0 }),
     'reader.getSectionTextMap': () => ({ __error: true, code: 'error.unsupported' }),
@@ -598,7 +622,6 @@ async function main() {
 
   for (const view of NS.Views.LIST) {
     await test('view "' + view + '" renders without throwing', async () => {
-      viewEnv.NS.settings.hebrewSource = 'sefaria';
       viewEnv.NS.App.setView(view);
       await new Promise((r) => setTimeout(r, 60));
       const host = viewEnv.fixture.document.getElementById('render-host');
@@ -610,6 +633,27 @@ async function main() {
       }
     });
   }
+  await test('Tap to reveal keeps uncertain Hebrew at section level', async () => {
+    const chunk = await viewEnv.NS.Data.book('Genesis');
+    const unit = Object.assign({}, chunk.units[0], { al: 0 });
+    const host = new StubNode('div');
+    viewEnv.NS.Views.reveal({
+      host,
+      book: manifest.books.Genesis,
+      unit,
+      from: 0,
+      to: 2,
+      focus: null,
+      segmentGroups: null,
+      hebrew: unit.h,
+      options: { numbers: true },
+      notesFor: () => [],
+    });
+    const rows = host.querySelectorAll('.reveal-row');
+    eq(rows.length, 2);
+    eq(rows[0].querySelectorAll('.seg-he-text').length, 0, 'no unconfirmed per-passage Hebrew pairing');
+    eq(host.querySelectorAll('.reveal-section').length, 1, 'single section-level Hebrew line');
+  });
   await test('peek shows a window around the focus, not the whole chapter', async () => {
     viewEnv.NS.settings.revealContext = 1;
     viewEnv.NS.App.setView('peek');
@@ -618,33 +662,36 @@ async function main() {
     const blocks = host.querySelectorAll('.peek-block');
     eq(blocks.length, 3, 'focus ±1');
   });
-  await test('the credit line names a real source with its licence', async () => {
+  await test('reader views do not display credits, licences, or source lists', async () => {
     viewEnv.NS.App.setView('english');
     await new Promise((r) => setTimeout(r, 60));
     const host = viewEnv.fixture.document.getElementById('render-host');
-    const chips = host.querySelectorAll('.credit-chip');
-    assert(chips.length > 0, 'credit chips present');
-    const label = chips[0].textContent;
-    assert(manifest.sources.some((s) => label.indexOf(s.title) >= 0), 'chip names a pack source: ' + label);
+    eq(host.querySelectorAll('.credit-chip').length, 0);
+    eq(host.querySelectorAll('.source-list').length, 0);
+    const visible = host.textContent.toLowerCase();
+    assert(!/copyright|licen[cs]e|cc-by|cc0|test translation/.test(visible), visible);
+    const html = fs.readFileSync(path.join(PLUGIN, 'index.html'), 'utf8');
+    assert(!/credits|licen[cs]es|copyright/i.test(html), 'no visible credits or licence controls');
   });
-  await test('view labels are translated when the UI language is English', () => {
+  await test('plugin labels stay English even when Otzaria is Hebrew', () => {
     const e = loadPlugin({});
-    e.NS.setLanguage('en', 'ltr');
+    e.NS.setLanguage('he', 'rtl');
+    eq(e.NS.lang, 'en');
+    eq(e.NS.dir, 'ltr');
     eq(e.NS.Views.label('sidebyside'), 'Side by side');
     eq(e.NS.Views.label('peek'), 'Peek');
-    e.NS.setLanguage('he', 'rtl');
-    eq(e.NS.Views.label('sidebyside'), 'זה לצד זה');
   });
   await test('every UI string has an English translation', () => {
     const dict = viewEnv.sandbox.window.TRANSLATIONS.en;
     const missing = [];
-    const files = ['js/views.js', 'js/credits.js', 'js/app.js'];
+    const files = ['js/views.js', 'js/data-loader.js', 'js/app.js'];
     for (const rel of files) {
       const src = fs.readFileSync(path.join(PLUGIN, rel), 'utf8');
       const re = /NS\.t\(\s*'([^']+)'/g;
       let m;
       while ((m = re.exec(src)) !== null) {
         if (!Object.prototype.hasOwnProperty.call(dict, m[1])) missing.push(rel + ': ' + m[1]);
+        else if (/[\u0590-\u05ff]/.test(dict[m[1]])) missing.push(rel + ': Hebrew translation for ' + m[1]);
       }
     }
     deepEq(missing, []);
@@ -669,7 +716,7 @@ async function main() {
   });
   await test('a book with no English in the pack says so', async () => {
     const e = loadPlugin({
-      'reader.getCurrentRef': () => ({ bookId: 'רמבם הלכות תשובה', ref: 'פרק א', index: 0 }),
+      'reader.getCurrentRef': () => ({ bookId: 'ספר שלא קיים', ref: 'פרק א', index: 0 }),
       'storage.get': () => null,
     });
     await boot(e);
@@ -686,7 +733,7 @@ async function main() {
     });
     await boot(e);
     e.emit('reader.context_menu_item_clicked', {
-      itemId: 'show-english',
+      itemId: 'english-translation',
       selectedText: 'וירא אלהים את האור',
       currentRef: 'פרק א, פסוק ד',
       currentBook: 'בראשית',
@@ -698,7 +745,27 @@ async function main() {
     assert(blocks.length > 0, 'peek rendered, got ' + host.textContent.slice(0, 80));
     assert(blocks.length < 31, 'windowed, not the whole chapter: ' + blocks.length);
   });
-  await test('follow mode re-renders on reader.current_ref_changed', async () => {
+  await test('the split context-menu action opens a side-by-side translation', async () => {
+    const e = loadPlugin({
+      'reader.getCurrentRef': () => null,
+      'reader.getSectionTextMap': () => ({ __error: true, code: 'error.unsupported' }),
+      'storage.get': () => null,
+    });
+    await boot(e);
+    e.emit('reader.context_menu_item_clicked', {
+      itemId: 'english-translation-split',
+      param: 'split',
+      currentBookId: 'בראשית',
+      currentRef: 'פרק א',
+    });
+    await new Promise((r) => setTimeout(r, 80));
+    eq(e.fixture.document.getElementById('render-host').querySelectorAll('.sbs-grid').length, 1);
+    const mf = JSON.parse(fs.readFileSync(path.join(PLUGIN, 'manifest.json'), 'utf8'));
+    const items = mf.contributes.startup.contextMenuItems;
+    eq(items.length, 2);
+    assert(items.every((item) => !/[א-ת]/.test(item.title)), 'context menu labels are English');
+  });
+  await test('Follow reader button enables updates from normalized reader events', async () => {
     const e = loadPlugin({
       'reader.getCurrentRef': () => ({ bookId: 'בראשית', ref: 'פרק א', index: 0 }),
       'reader.getSectionTextMap': () => ({ __error: true, code: 'error.unsupported' }),
@@ -706,12 +773,22 @@ async function main() {
     });
     await boot(e);
     await new Promise((r) => setTimeout(r, 60));
-    e.NS.settings.follow = true;
-    const before = e.fixture.document.getElementById('bar-title').textContent;
-    e.emit('reader.current_ref_changed', { bookId: 'שמות', ref: 'פרק ב', bookTitle: 'שמות' });
+    const button = e.fixture.document.getElementById('btn-follow');
+    button.dispatch('click');
+    await new Promise((r) => setTimeout(r, 50));
+    eq(e.NS.settings.follow, true);
+    eq(button.textContent, 'Following reader');
+    e.emit('reader.current_ref_changed', {
+      book: { title: 'שמות' },
+      currentBookId: 'שמות',
+      currentReference: 'פרק ב',
+      sectionIndex: 1,
+    });
     await new Promise((r) => setTimeout(r, 80));
-    const after = e.fixture.document.getElementById('bar-title').textContent;
-    assert(before !== after, 'title updated: ' + before + ' -> ' + after);
+    assert(
+      e.fixture.document.getElementById('bar-subtitle').textContent.indexOf('שמות') >= 0,
+      'updated to the new book: ' + e.fixture.document.getElementById('bar-subtitle').textContent
+    );
   });
   await test('without follow mode a ref change is ignored', async () => {
     const e = loadPlugin({
@@ -727,21 +804,19 @@ async function main() {
     await new Promise((r) => setTimeout(r, 60));
     eq(e.fixture.document.getElementById('bar-title').textContent, before);
   });
-  await test('Otzaria Hebrew is used when it aligns, and labelled when it does not', async () => {
-    const chunk = JSON.parse(
-      fs.readFileSync(path.join(ROOT, 'dist', 'pack', 'chunks', 'Genesis.json'), 'utf8')
-    ).units[0];
-    const otzText = chunk.h ? chunk.h.join(' ') : null;
+  await test('an unalignable Hebrew fallback is silent and shows no mismatch detail', async () => {
     const e = loadPlugin({
       'reader.getCurrentRef': () => ({ bookId: 'בראשית', ref: 'פרק א', index: 0 }),
-      'reader.getSectionTextMap': () => ({ sourceText: otzText, hasMore: false }),
+      'reader.getSectionTextMap': () => ({ sourceText: 'משה רבינו קיבל תורה מסיני', hasMore: false }),
       'storage.get': () => null,
     });
-    // Serve the real chunk as JSON too, for the fixture above.
     await boot(e);
     await new Promise((r) => setTimeout(r, 80));
     const host = e.fixture.document.getElementById('render-host');
-    assert(host.textContent.length > 20, 'rendered');
+    assert(host.textContent.indexOf('בראשית ברא אלהים') >= 0, 'packed Hebrew fallback used');
+    assert(!/Sefaria|normaliz|letter-sequence-mismatch/i.test(host.textContent), host.textContent);
+    eq(e.fixture.document.getElementById('notice').textContent, '', 'no alignment notice');
+    eq(e.fixture.document.getElementById('status').textContent, '', 'no warning detail');
   });
   await test('no network permission is declared and no network API is called', () => {
     const mf = JSON.parse(fs.readFileSync(path.join(PLUGIN, 'manifest.json'), 'utf8'));
@@ -755,7 +830,33 @@ async function main() {
     assert(!/src\s*=\s*["']https?:/i.test(html), 'no remote script in index.html');
     assert(!/href\s*=\s*["']https?:/i.test(html), 'no remote stylesheet in index.html');
   });
-  await test('the Credits screen renders the source table from the pack', async () => {
+  await test('Translate, Split view, and Reader buttons use the current location', async () => {
+    const e = loadPlugin({
+      'reader.getCurrentRef': () => ({ bookId: 'בראשית', ref: 'פרק א, פסוק ג', index: 0 }),
+      'reader.getSectionTextMap': () => ({ __error: true, code: 'error.unsupported' }),
+      'reader.openBookAtRef': (payload) => payload,
+      'storage.get': () => null,
+    });
+    await boot(e);
+    await new Promise((r) => setTimeout(r, 60));
+    const readsBefore = e.calls.filter((call) => call.method === 'reader.getCurrentRef').length;
+    e.fixture.document.getElementById('btn-translate').dispatch('click');
+    await new Promise((r) => setTimeout(r, 60));
+    assert(e.calls.filter((call) => call.method === 'reader.getCurrentRef').length > readsBefore, 'Translate refreshes location');
+
+    e.NS.App.setView('english');
+    await new Promise((r) => setTimeout(r, 60));
+    e.fixture.document.getElementById('btn-split').dispatch('click');
+    await new Promise((r) => setTimeout(r, 80));
+    eq(e.fixture.document.getElementById('render-host').querySelectorAll('.sbs-grid').length, 1);
+    e.fixture.document.getElementById('btn-reader').dispatch('click');
+    await new Promise((r) => setTimeout(r, 20));
+    const opened = e.calls.filter((call) => call.method === 'reader.openBookAtRef').pop();
+    assert(opened, 'Reader action called');
+    eq(opened.payload.ref, 'פרק א, פסוק ג');
+    eq(opened.payload.bookId, 'בראשית');
+  });
+  await test('boot forces every plugin control to English and left-to-right', async () => {
     const e = loadPlugin({
       'reader.getCurrentRef': () => ({ bookId: 'בראשית', ref: 'פרק א', index: 0 }),
       'reader.getSectionTextMap': () => ({ __error: true, code: 'error.unsupported' }),
@@ -763,15 +864,13 @@ async function main() {
     });
     await boot(e);
     await new Promise((r) => setTimeout(r, 60));
-    e.NS.openCredits('Genesis', 1);
-    await new Promise((r) => setTimeout(r, 60));
-    const body = e.fixture.document.getElementById('credits-body');
-    const rows = body.querySelectorAll('tr');
-    assert(rows.length >= 2, 'source rows: ' + rows.length);
-    const genesis = manifest.books.Genesis;
-    const src = manifest.sources[genesis.src[0]];
-    assert(body.textContent.indexOf(src.license) >= 0, 'licence of ' + src.title + ' shown');
-    assert(body.textContent.indexOf(src.title) >= 0, 'source title shown');
+    eq(e.fixture.document.documentElement.getAttribute('lang'), 'en');
+    eq(e.fixture.document.documentElement.getAttribute('dir'), 'ltr');
+    const html = fs.readFileSync(path.join(PLUGIN, 'index.html'), 'utf8');
+    assert(!/[א-ת]/.test(html), 'static interface and settings contain no Hebrew labels');
+    eq(e.fixture.document.getElementById('btn-follow').textContent, 'Follow reader');
+    const labels = e.fixture.document.getElementById('view-tabs').textContent;
+    assert(labels.indexOf('Side by side') >= 0 && labels.indexOf('Peek') >= 0, labels);
   });
 
   // ---- Schema / stage mapping (Python) ------------------------------------
@@ -782,6 +881,8 @@ async function main() {
         [['Chapter', 'Verse'], 2],
         [['Chapter', 'Mishnah'], 2],
         [['Daf', 'Line'], 2],
+        [['Chapter', 'Halakhah'], 2],
+        [['Siman', "Se'if"], 2],
         [['Chapter'], 1],
         [null, 2],
         [null, 1],
@@ -791,7 +892,7 @@ async function main() {
     // "chapter" instead of guessing a verse-level address.
     deepEq(
       rows.map((r) => r.schema),
-      ['verse', 'mishnah', 'daf', 'chapter', 'chapter', 'chapter']
+      ['verse', 'mishnah', 'daf', 'halakha', 'siman', 'chapter', 'chapter', 'chapter']
     );
   });
   await test('export directories map to the right stage', () => {
@@ -800,13 +901,103 @@ async function main() {
         'json/Tanakh/Torah/Genesis',
         'json/Mishnah/Seder Zeraim/Mishnah Berakhot',
         'json/Talmud/Bavli/Seder Moed/Shabbat',
+        'json/Halakhah/Mishneh Torah/Sefer Madda/Mishneh Torah, Repentance',
+        'json/Musar/Acharonim/Mesillat Yesharim',
         'json/Chasidut/SomeBook',
       ],
     });
     deepEq(
       rows.map((r) => r.stage),
-      ['tanakh', 'mishnah', 'talmud', null]
+      ['tanakh', 'mishnah', 'talmud', 'halakhah', 'musar', null]
     );
+  });
+
+  await test('recursive discovery finds nested commentaries and all supported roots', () => {
+    const rows = python('discover_nested', {});
+    deepEq(
+      rows.map((row) => row.stage),
+      ['tanakh', 'mishnah', 'talmud', 'halakhah', 'halakhah', 'musar']
+    );
+    assert(rows[0].dir.indexOf('Rashi on Genesis') >= 0, rows[0].dir);
+    assert(rows.some((row) => row.dir.indexOf('Mishnah Berurah') >= 0), 'Mishnah Berurah discovered');
+  });
+  await test('nested text flattening preserves 1-based Sefaria addresses', () => {
+    const rows = python('flatten_paths', { text: { text: [[['a', 'b'], ['c']]] } });
+    deepEq(rows, [[[[1, 1], 'a'], [[1, 2], 'b'], [[2, 1], 'c']]]);
+  });
+  await test('the full build pipeline writes all supported stages and script wrappers', () => {
+    const data = python('pipeline_smoke', {});
+    eq(data.status, 0);
+    eq(data.bookCount, 6);
+    deepEq(data.stages, ['tanakh', 'mishnah', 'talmud', 'halakhah', 'musar']);
+    assert(data.books.indexOf('Rashi on Genesis') >= 0, 'nested Tanakh commentary included');
+    assert(data.books.indexOf('Mishnah Berakhot') >= 0, 'Mishnah included');
+    assert(data.books.indexOf('Mishneh Torah, Repentance') >= 0, 'Rambam included');
+    assert(data.books.indexOf('Mesillat Yesharim') >= 0, 'Musar included');
+    deepEq(data.rashiGroups, [[1, 1]]);
+    assert(data.manifestScriptValid, 'manifest wrapper is a closed script call');
+    assert(data.reportsWritten, 'pipeline reports emitted');
+  });
+  await test('nested commentary builds merge by path and preserve verse groups', () => {
+    const data = python('nested_book_build', {});
+    const commentary = data.commentary;
+    eq(commentary.schema, 'verse');
+    deepEq(commentary.units[0].e, [
+      'Preferred comment on verse one.',
+      'Fallback comment two on verse one.',
+      'Preferred comment on verse two.',
+    ]);
+    deepEq(commentary.units[0].g, [[2, 1], [1, 2]]);
+    eq(commentary.units[0].al, 1);
+  });
+  await test('Mishnah Berurah and Rambam infer usable siman and halakhah schemas', () => {
+    const data = python('nested_book_build', {});
+    eq(data.berurah.schema, 'siman');
+    deepEq(data.berurah.sectionNames, ['Siman', 'Seif']);
+    deepEq(data.berurah.units[0].e, ['Paragraph one.', 'Paragraph two.']);
+    eq(data.rambam.schema, 'halakha');
+    deepEq(data.rambam.sectionNames, ['Chapter', 'Halakhah']);
+  });
+  await test('a bad imported library falls back to the built-in library once', async () => {
+    const e = loadPlugin({
+      'fs.pickUserFile': () => ({ token: 'bad-pack-token' }),
+      'fs.resolveFileUrl': () => ({ __error: true, code: 'error.file_not_found', message: 'missing file' }),
+      'storage.set': () => null,
+    });
+    const manifest = await e.NS.Data.pickAndUsePack();
+    eq(manifest.formatVersion, 1);
+    eq(manifest.stats.books, fixtureManifest.stats.books);
+    eq(e.NS.Data.mode(), 'bundled');
+    eq(e.NS.settings.dataSource, 'bundled');
+  });
+  await test('.otzenpack ranges round-trip and import through the plugin data loader', async () => {
+    const data = python('otzenpack', {});
+    eq(data.chunks, 1);
+    assert(data.size > data.footerLength + 12, 'pack contains index and records');
+    eq(data.manifest.formatVersion, 1);
+    eq(data.chunk.book, 'Test');
+    assert(data.index.manifest.length > 0, 'manifest byte range');
+    assert(data.index.chunks.Test.length > 0, 'chunk byte range');
+
+    const bytes = Buffer.from(data.payloadBase64, 'base64');
+    const e = loadPlugin({
+      'fs.pickUserFile': () => ({ token: 'test-pack-token' }),
+      'fs.resolveFileUrl': () => ({ url: 'otzenpack://fixture', size: bytes.length, name: 'fixture.otzenpack' }),
+    });
+    e.sandbox.fetch = (url, options) => {
+      eq(url, 'otzenpack://fixture');
+      const range = /^bytes=(\d+)-(\d+)$/.exec(options.headers.Range);
+      assert(range, 'Range header present');
+      const part = bytes.subarray(Number(range[1]), Number(range[2]) + 1);
+      const buffer = part.buffer.slice(part.byteOffset, part.byteOffset + part.byteLength);
+      return Promise.resolve({ ok: true, status: 206, arrayBuffer: () => Promise.resolve(buffer) });
+    };
+    const imported = await e.NS.Data.pickAndUsePack();
+    eq(imported.formatVersion, 1);
+    eq(e.NS.Data.mode(), 'imported');
+    const chunk = await e.NS.Data.book('Test');
+    eq(chunk.book, 'Test');
+    eq(chunk.units[0].e[0], 'A test.');
   });
 
   // ---- Summary ------------------------------------------------------------

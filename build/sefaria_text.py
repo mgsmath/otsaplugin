@@ -167,22 +167,65 @@ def daf_to_section(label: str) -> Optional[int]:
     return 2 * (n - 1) + (1 if m.group(2).lower() == "a" else 2)
 
 
-def flatten_text(text) -> List[List[str]]:
-    """Normalise a Sefaria ``text`` payload to ``[[seg, ...], ...]``.
+def _text_has_content(value) -> bool:
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, list):
+        return any(_text_has_content(v) for v in value)
+    if isinstance(value, dict):
+        return any(_text_has_content(v) for v in value.values())
+    return False
 
-    Sefaria exports depth-1 books as a flat list of strings and depth-2 books as
-    a list of lists. Empty chapters are preserved so chapter indices stay stable.
+
+def _text_root(text):
+    """Unwrap named schema nodes while retaining their text-array structure."""
+    if not isinstance(text, dict):
+        return text
+    populated = [(key, value) for key, value in text.items() if _text_has_content(value)]
+    if len(populated) == 1:
+        return populated[0][1]
+    if populated:
+        # Complex indexes can expose multiple named nodes. Preserve node order;
+        # each becomes a top-level unit when no single main node is available.
+        return [value for _key, value in populated]
+    return []
+
+
+def flatten_text(text) -> List[List[str]]:
+    """Normalize Sefaria text to rows of leaf strings, preserving top-level units.
+
+    Standard chapter/segment arrays keep their old shape. Deeper commentary text
+    is flattened within each chapter, while named-node objects (for example
+    Mishnah Berurah's schema export) are unwrapped without discarding content.
     """
-    out: List[List[str]] = []
-    if not isinstance(text, list):
+    return [[segment for _path, segment in row] for row in flatten_text_with_paths(text)]
+
+
+def flatten_text_with_paths(text) -> List[List[Tuple[Tuple[int, ...], str]]]:
+    """Return each leaf string with its 1-based path inside its top-level unit."""
+    root = _text_root(text)
+    out: List[List[Tuple[Tuple[int, ...], str]]] = []
+    if not isinstance(root, list):
         return out
-    for chapter in text:
-        if isinstance(chapter, str):
-            out.append([chapter] if chapter.strip() else [])
-        elif isinstance(chapter, list):
-            out.append([c if isinstance(c, str) else "" for c in chapter])
+
+    def walk(value, prefix: Tuple[int, ...], found: List[Tuple[Tuple[int, ...], str]]) -> None:
+        if isinstance(value, str):
+            found.append((prefix or (1,), value))
+        elif isinstance(value, list):
+            for index, child in enumerate(value, 1):
+                walk(child, prefix + (index,), found)
+        elif isinstance(value, dict):
+            for index, child in enumerate(value.values(), 1):
+                walk(child, prefix + (index,), found)
+
+    for row in root:
+        found: List[Tuple[Tuple[int, ...], str]] = []
+        if isinstance(row, str):
+            if row.strip():
+                found.append(((1,), row))
         else:
-            out.append([])
+            walk(row, (), found)
+        out.append(found)
     return out
 
 

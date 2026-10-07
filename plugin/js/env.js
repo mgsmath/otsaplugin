@@ -158,9 +158,7 @@
     numbers: true,
     density: 'comfortable', // 'compact' | 'comfortable'
     fontScale: 1,
-    creditLine: true,
     revealContext: 2, // +/- segments around a selection in Peek
-    hebrewSource: 'otzaria', // 'otzaria' | 'sefaria'
     dataSource: 'bundled', // 'bundled' | 'imported'
     importToken: null,
   };
@@ -200,26 +198,26 @@
 
   // ---- i18n ---------------------------------------------------------------
 
-  NS.lang = 'he';
-  NS.dir = 'rtl';
+  // The plugin interface is intentionally English regardless of Otzaria's locale.
+  NS.lang = 'en';
+  NS.dir = 'ltr';
 
-  NS.setLanguage = function (language, textDirection) {
-    NS.lang = language === 'en' ? 'en' : 'he';
-    NS.dir = textDirection === 'ltr' ? 'ltr' : 'rtl';
-    var dict = (window.TRANSLATIONS && window.TRANSLATIONS[NS.lang]) || null;
-    NS._dict = dict;
+  NS.setLanguage = function () {
+    NS.lang = 'en';
+    NS.dir = 'ltr';
+    NS._dict = (window.TRANSLATIONS && window.TRANSLATIONS.en) || null;
   };
 
-  /** Hebrew is the source language; a missing key falls back to the Hebrew string. */
-  NS.t = function (he) {
-    var d = NS._dict;
-    if (d && Object.prototype.hasOwnProperty.call(d, he)) return d[he];
-    return he;
+  /** UI strings are English; the Hebrew keys are stable internal identifiers. */
+  NS.t = function (key) {
+    var d = NS._dict || (window.TRANSLATIONS && window.TRANSLATIONS.en);
+    if (d && Object.prototype.hasOwnProperty.call(d, key)) return d[key];
+    return key;
   };
 
   NS.applyDirection = function () {
-    document.documentElement.setAttribute('dir', NS.dir);
-    document.documentElement.setAttribute('lang', NS.lang === 'en' ? 'en' : 'he');
+    document.documentElement.setAttribute('dir', 'ltr');
+    document.documentElement.setAttribute('lang', 'en');
   };
 
   // ---- Text helpers shared by the views ----------------------------------
@@ -261,18 +259,20 @@
     return u ? inter / u : 0;
   };
 
-  /**
-   * Run-length provenance -> array of source ids, one per segment.
-   * Mirrors build/sefaria_text.py:rle_decode.
-   */
-  NS.expandProvenance = function (pairs, length) {
+  /** Expand a run-length encoded integer array (source ids or segment groups). */
+  NS.expandRuns = function (pairs, length, fallback) {
     var out = [];
     for (var i = 0; i < (pairs || []).length; i++) {
       var count = pairs[i][0];
       var value = pairs[i][1];
       for (var n = 0; n < count; n++) out.push(value);
     }
-    while (out.length < length) out.push(-1);
+    while (out.length < length) out.push(fallback === undefined ? -1 : fallback);
     return out.slice(0, length);
+  };
+
+  // Retained for older test packs / import files that use source provenance.
+  NS.expandProvenance = function (pairs, length) {
+    return NS.expandRuns(pairs, length, -1);
   };
 })();

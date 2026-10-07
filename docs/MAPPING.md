@@ -1,68 +1,69 @@
 # Otzaria ⇄ Sefaria reference mapping
 
-The plugin must show, for whatever the user is reading in Otzaria, the *same*
-passage's Sefaria merged English. That is two independent resolutions, because a
-wrong verse is worse than no verse.
+The plugin resolves a reader location to a work in the offline translation pack and
+then to an address within that work. If a title or reference cannot be resolved
+safely, it does not silently substitute a different passage.
 
 ## 1. Resolve the book
 
-Otzaria's Hebrew book title → Sefaria work key via the pack's generated
-`titleIndex` (Sefaria's own `heTitle` plus mechanical aliases and the
-hand-maintained `build/otzaria_title_overrides.json`).
+Otzaria's Hebrew book title maps to a Sefaria work key via the generated
+`titleIndex` (`heTitle`, English title, mechanical aliases and any checked-in
+mapping overrides). Shared titles remain ambiguous rather than being guessed:
+Bavli Berakhot and Mishnah Berakhot can both arrive as `ברכות`, so the plugin
+presents a chooser when the reader does not provide enough category context.
 
-Ambiguity is explicit, not guessed. Otzaria calls Bavli Berakhot and Mishnah
-Berakhot by the same name (`ברכות`; normalising `משנה ברכות` yields the same key).
-`build_title_index` therefore emits a **list** for a colliding key, and
-`Ref.resolveBook` returns it as-is; the runtime shows a chooser instead of picking.
-See `reports/coverage.md` § *Ambiguous Otzaria titles*.
+Mishneh Torah/Rambam title prefixes are normalized alongside the existing
+`משנה` and `מסכת` prefixes. Recursive discovery includes nested commentary work
+directories; the title index still uses the export's per-work title metadata.
 
 ## 2. Resolve the address
 
-`plugin/js/refmap.js` parses the Otzaria Hebrew ref into the schema of the work:
+`plugin/js/refmap.js` parses an Otzaria reference using the schema recorded for the
+work:
 
 | Schema | Example refs | Address |
 |---|---|---|
-| verse | `פרק א, פסוק ג`, `א:ג`, `טו:ז` | `chapter:verse` |
-| mishnah | `פרק א, משנה ב`, `ב:ד` | `chapter:mishnah` |
-| daf | `דף ב.`, `דף ב:`, `ב.`, `דף ב ע"א` | daf + amud |
+| verse | `פרק א, פסוק ג`, `א:ג` | chapter and verse |
+| mishnah | `פרק א, משנה ב`, `ב:ד` | chapter and mishnah |
+| daf | `דף ב.`, `דף ב:`, `דף ב ע"א` | daf and amud |
+| halakha | `פרק א, הלכה ב` | chapter and halakhah |
+| siman | `סימן א, סעיף ב` | siman and seif |
 | chapter | `פרק ה` | chapter |
 
-Hebrew numerals and daf arithmetic mirror `build/sefaria_text.py` (`hebrewToInt ≡
-hebrew_numeral_to_int`, `dafToSection ≡ daf_to_section`), which the tests check
-against each other.
+Hebrew numeral parsing and daf arithmetic are tested against the Python build
+helpers. For daf works, section 3 is 2a and section 4 is 2b.
 
-**Daf convention (verified against the export, not copied from Otzaria's
-`toEnglishDaf`, which is off by one):** `section = index + 1`; `n = (section+1)//2`;
-amud `'a'` iff section odd. So section 3 = `2a`, section 4 = `2b`.
+## 3. Preserve nested addresses
 
-**Safety:** a bare Hebrew *word* must not read as a numeral. `NS.isPlausibleNumeral`
-requires non-increasing letter values (plus the standard `טו`/`טז`), so `לא ידוע`
-("unknown") is rejected rather than parsed as chapter 121.
+Sefaria commentary text can have a nested shape such as
+`chapter → verse → comment`. The build flattens text for display but retains the
+nested address group (`unit.g`) so verse references and displayed comment labels
+remain attached to the correct verse. Versions are merged by their address paths,
+not by their flattened positions; an omitted comment in one version cannot shift
+a later comment onto the wrong verse.
 
-## 3. Confirm against what the reader actually shows
+Mishnah Berurah exports can store text under named schema nodes and omit ordinary
+`sectionNames`. The build unwraps populated nodes and infers a siman/seif schema
+from the work metadata. Mishneh Torah exports similarly receive a chapter/halakhah
+schema when the version file omits section names.
 
-The parsed address is a *hypothesis*; the plugin then confirms it against Otzaria's
-own text where possible:
+## 4. Confirm and render
 
-- `Ref.locateSegment` ties a user selection to a segment by token overlap, refusing
-  below a similarity floor.
-- `NS.alignHebrew` aligns the reader's whole-section Hebrew to the pack's per-segment
-  Hebrew letter-for-letter (niqqud/punctuation/tags dropped). Anything less than an
-  exact match degrades to section level and is flagged *approximate*.
+Where the SDK supplies reader Hebrew, `NS.alignHebrew` checks it against the
+packed text after stripping marks and punctuation. An exact match can be shown
+beside the corresponding translation segments. If it does not align, the plugin
+uses the packed Hebrew when present and does not show a mismatch warning. Views
+that need per-segment pairing fall back to section-level Hebrew instead of
+inventing an alignment.
 
-## 4. Coverage (pack side)
+## 5. Coverage and provenance
 
-`reports/coverage.csv|md` list, per work, segments, missing segments and aligned
-units. Under the `open` policy: Tanakh 39/39, Mishnah 51/52 (Terumot has no
-redistributable English), Berakhot full, Shabbat partial. The Otzaria side is
-resolved at runtime from `library.getTree`; the pack side is what we can promise.
+The build recursively scans all English-bearing work directories under Tanakh,
+Mishnah, Talmud, Halakhah and Musar. It includes only versions accepted by the
+chosen redistribution policy. A work or passage with no eligible English text
+remains unavailable. Full pinned-export coverage has not been verified in this
+workspace; run `build/build_all.sh` to generate fresh `reports/coverage.*`.
 
-## The merge model (why provenance exists)
-
-`merged.json` has no per-segment provenance and no licence. We rebuild it: versions
-ordered by `priority` desc (absent = 0), ties by segment count then title; per
-segment first non-empty wins; restricted to `actualLanguage` en/absent.
-`reports/merge-fidelity.md` shows this reproduces Sefaria's `merged.json` at
-**100.00% (32,934/32,935)** — including the measured finding that Sefaria's merge is
-language-scoped (the French/German files in `English/` must be excluded). Each kept
-segment records its contributing version index (RLE) so the UI can attribute it.
+The plugin UI no longer exposes per-passage sources or a source/licence browser.
+The generated data retains internal version and licence provenance, and
+maintainer reports document the selected sources and exclusions.

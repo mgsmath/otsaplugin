@@ -17,8 +17,8 @@
  *     file the user picks with `fs.pickUserFile`. Otzaria serves it from its
  *     internal loopback file server with full `Range` support and CORS headers
  *     that reflect `Origin: null`, so we read exactly the bytes we need. Used
- *     for the large (full-Talmud) builds where a 10+ MB script per work would
- *     be wasteful. No network permission is involved.
+ *     for the extended commentary, Halakhah and Musar library where a large
+ *     script per work would be wasteful. No network permission is involved.
  *
  * `.otzenpack` layout (all UTF-8 JSON, no compression so no decoder is needed):
  *
@@ -162,6 +162,8 @@
         if (useImported) {
           NS.log('imported pack failed, falling back to bundled', err && err.message);
           remote = null;
+          NS.settings.dataSource = 'bundled';
+          NS.saveSettings();
           manifestPromise = null;
           return Data.init();
         }

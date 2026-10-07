@@ -96,6 +96,249 @@ def case_stage(args):
     return [{"dir": d, "stage": scope.stage_of_book_dir(d)} for d in args["cases"]]
 
 
+def case_discover_nested(args):
+    import tempfile
+
+    paths = [
+        "json/Tanakh/Rishonim on Tanakh/Rashi/Torah/Rashi on Genesis",
+        "json/Mishnah/Rishonim on Mishnah/Rambam/Seder Zeraim/Rambam on Mishnah Berakhot",
+        "json/Talmud/Yerushalmi/Seder Moed/Jerusalem Talmud Shabbat",
+        "json/Halakhah/Mishneh Torah/Sefer Madda/Mishneh Torah, Repentance",
+        "json/Halakhah/Shulchan Arukh/Commentary/Mishnah Berurah/Mishnah Berurah",
+        "json/Musar/Acharonim/Mesillat Yesharim",
+    ]
+    with tempfile.TemporaryDirectory() as root:
+        for rel in paths:
+            os.makedirs(os.path.join(root, rel, "English"), exist_ok=True)
+        found = pipeline.discover_book_dirs(root, scope.STAGE_ORDER, None)
+        return [{"dir": rel, "stage": stage} for rel, _path, stage in found]
+
+
+def case_flatten_paths(args):
+    return [
+        [[list(path), text] for path, text in row]
+        for row in sefaria_text.flatten_text_with_paths(args["text"])
+    ]
+
+
+def case_nested_book_build(args):
+    import tempfile
+
+    def write_json(path, payload):
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(payload, fh, ensure_ascii=False)
+
+    with tempfile.TemporaryDirectory() as root:
+        commentary_rel = "json/Tanakh/Rishonim on Tanakh/Rashi/Torah/Rashi on Genesis"
+        commentary_dir = os.path.join(root, commentary_rel)
+        commentary_en = {
+            "title": "Rashi on Genesis",
+            "heTitle": "רש\u05f4י על בראשית",
+            "categories": ["Tanakh", "Rishonim on Tanakh", "Rashi", "Torah"],
+            "sectionNames": ["Chapter", "Verse", "Comment"],
+            "versionTitle": "Test commentary translation",
+            "versionSource": "https://example.org/test",
+            "actualLanguage": "en",
+            "license": "CC0",
+            "text": [[[
+                "Comment one on verse one.",
+                "Comment two on verse one.",
+            ], ["Comment one on verse two."]]],
+        }
+        commentary_he = [[[
+            "בראשית", "ברא",
+        ], ["אלהים"]]]
+        commentary_sparse = dict(commentary_en)
+        commentary_sparse.update(
+            {
+                "versionTitle": "Higher priority sparse translation",
+                "priority": 1,
+                "text": [[
+                    ["Preferred comment on verse one."],
+                    ["Preferred comment on verse two."],
+                ]],
+            }
+        )
+        commentary_fallback = dict(commentary_en)
+        commentary_fallback.update(
+            {
+                "versionTitle": "Complete fallback translation",
+                "priority": 0,
+                "text": [[
+                    ["Fallback comment one on verse one.", "Fallback comment two on verse one."],
+                    ["Fallback comment on verse two."],
+                ]],
+            }
+        )
+        write_json(os.path.join(commentary_dir, "English", "Test.json"), commentary_sparse)
+        write_json(os.path.join(commentary_dir, "English", "Fallback.json"), commentary_fallback)
+        write_json(os.path.join(commentary_dir, "Hebrew", "merged.json"), {"text": commentary_he})
+        commentary = pipeline.build_book(
+            commentary_rel, commentary_dir, "tanakh", pipeline.allowed_licences("open"), False
+        )
+
+        berurah_rel = "json/Halakhah/Shulchan Arukh/Commentary/Mishnah Berurah/Mishnah Berurah"
+        berurah_dir = os.path.join(root, berurah_rel)
+        berurah_text = {
+            "Introduction": [],
+            "": [["Paragraph one.", "Paragraph two."], ["Paragraph three."]],
+        }
+        berurah_en = {
+            "title": "Mishnah Berurah",
+            "heTitle": "משנה ברורה",
+            "categories": ["Halakhah", "Shulchan Arukh", "Commentary", "Mishnah Berurah"],
+            "schema": {"key": "Mishnah Berurah", "nodes": [{"enTitle": ""}]},
+            "versionTitle": "Test Mishnah Berurah translation",
+            "versionSource": "https://example.org/test",
+            "actualLanguage": "en",
+            "license": "CC0",
+            "text": berurah_text,
+        }
+        berurah_he = {"text": {"Introduction": [], "": [["הלכה אחת", "הלכה שתיים"], ["הלכה שלוש"]]}}
+        write_json(os.path.join(berurah_dir, "English", "Test.json"), berurah_en)
+        write_json(os.path.join(berurah_dir, "Hebrew", "merged.json"), berurah_he)
+        berurah = pipeline.build_book(
+            berurah_rel, berurah_dir, "halakhah", pipeline.allowed_licences("open"), False
+        )
+
+        rambam_rel = "json/Halakhah/Mishneh Torah/Sefer Madda/Mishneh Torah, Repentance"
+        rambam_dir = os.path.join(root, rambam_rel)
+        rambam_en = {
+            "title": "Mishneh Torah, Repentance",
+            "heTitle": "משנה תורה הלכות תשובה",
+            "categories": ["Halakhah", "Mishneh Torah", "Sefer Madda"],
+            "versionTitle": "Test Rambam translation",
+            "actualLanguage": "en",
+            "license": "CC0",
+            "text": [["Chapter one, halakhah one.", "Chapter one, halakhah two."]],
+        }
+        write_json(os.path.join(rambam_dir, "English", "Test.json"), rambam_en)
+        write_json(
+            os.path.join(rambam_dir, "Hebrew", "merged.json"),
+            {"text": [["הלכה ראשונה", "הלכה שנייה"]]},
+        )
+        rambam = pipeline.build_book(
+            rambam_rel, rambam_dir, "halakhah", pipeline.allowed_licences("open"), False
+        )
+        return {
+            "commentary": commentary,
+            "berurah": berurah,
+            "rambam": rambam,
+        }
+
+
+def case_pipeline_smoke(args):
+    import tempfile
+
+    def write_json(path, payload):
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(payload, fh, ensure_ascii=False)
+
+    def add_work(root, rel, title, he_title, categories, section_names, english_text, hebrew_text):
+        work = os.path.join(root, rel)
+        version = {
+            "title": title,
+            "heTitle": he_title,
+            "categories": categories,
+            "sectionNames": section_names,
+            "versionTitle": "Smoke test translation",
+            "versionSource": "https://example.org/smoke",
+            "actualLanguage": "en",
+            "license": "CC0",
+            "text": english_text,
+        }
+        write_json(os.path.join(work, "English", "Smoke.json"), version)
+        write_json(os.path.join(work, "Hebrew", "merged.json"), {"text": hebrew_text})
+
+    with tempfile.TemporaryDirectory() as root:
+        export = os.path.join(root, "export")
+        add_work(export, "json/Tanakh/Torah/Genesis", "Genesis", "בראשית", ["Tanakh", "Torah"],
+                 ["Chapter", "Verse"], [["In the beginning."]], [["בראשית ברא"]])
+        add_work(export, "json/Tanakh/Rishonim on Tanakh/Rashi/Torah/Rashi on Genesis",
+                 "Rashi on Genesis", "רש\u05f4י על בראשית", ["Tanakh", "Rishonim on Tanakh", "Rashi"],
+                 ["Chapter", "Verse", "Comment"], [[["A comment."]]], [[["בראשית ברא"]]])
+        add_work(export, "json/Mishnah/Seder Zeraim/Mishnah Berakhot", "Mishnah Berakhot", "משנה ברכות",
+                 ["Mishnah", "Seder Zeraim"], ["Chapter", "Mishnah"], [["A mishnah."]], [["משנה"]])
+        add_work(export, "json/Talmud/Bavli/Seder Zeraim/Berakhot", "Berakhot", "ברכות",
+                 ["Talmud", "Bavli", "Seder Zeraim"], ["Daf", "Line"], [["A daf line."]], [["גמרא"]])
+        add_work(export, "json/Halakhah/Mishneh Torah/Sefer Madda/Mishneh Torah, Repentance",
+                 "Mishneh Torah, Repentance", "משנה תורה הלכות תשובה", ["Halakhah", "Mishneh Torah"],
+                 ["Chapter", "Halakhah"], [["A halakhah."]], [["הלכה"]])
+        add_work(export, "json/Musar/Acharonim/Mesillat Yesharim", "Mesillat Yesharim", "מסילת ישרים",
+                 ["Musar", "Acharonim"], ["Chapter"], [["A musar passage."]], [["מוסר"]])
+
+        out = os.path.join(root, "pack")
+        plugin_data = os.path.join(root, "plugin-data")
+        reports = os.path.join(root, "reports")
+        status = pipeline.main([
+            "--export-root", export,
+            "--out", out,
+            "--plugin-data", plugin_data,
+            "--reports", reports,
+            "--stages", ",".join(scope.STAGE_ORDER),
+            "--policy", "open",
+            "--no-fidelity",
+        ])
+        with open(os.path.join(out, "manifest.json"), encoding="utf-8") as fh:
+            manifest = json.load(fh)
+        with open(os.path.join(out, "chunks", "Rashi_on_Genesis.json"), encoding="utf-8") as fh:
+            rashi_chunk = json.load(fh)
+        manifest_script = open(os.path.join(plugin_data, "manifest.js"), encoding="utf-8").read()
+        return {
+            "status": status,
+            "stages": manifest["stages"],
+            "books": sorted(manifest["books"]),
+            "bookCount": manifest["stats"]["books"],
+            "rashiGroups": rashi_chunk["units"][0].get("g"),
+            "manifestScriptValid": manifest_script.startswith("window.__OTZ_EN.manifest(") and manifest_script.rstrip().endswith(");"),
+            "reportsWritten": os.path.isfile(os.path.join(reports, "coverage.md")),
+        }
+
+
+def case_otzenpack(args):
+    import base64
+    import tempfile
+    from build.make_otzenpack import build_otzenpack
+
+    def write_json(path, payload):
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(payload, fh, ensure_ascii=False)
+
+    with tempfile.TemporaryDirectory() as root:
+        pack_dir = os.path.join(root, "pack")
+        chunks_dir = os.path.join(pack_dir, "chunks")
+        os.makedirs(chunks_dir)
+        manifest = {"formatVersion": 1, "books": {"Test": {"chunk": "Test"}}}
+        chunk = {"book": "Test", "units": [{"a": [1], "e": ["A test."]}]}
+        write_json(os.path.join(pack_dir, "manifest.json"), manifest)
+        write_json(os.path.join(chunks_dir, "Test.json"), chunk)
+        output = os.path.join(root, "test.otzenpack")
+        size, count = build_otzenpack(pack_dir, output)
+        with open(output, "rb") as fh:
+            payload = fh.read()
+        footer_len = int(payload[-12:].decode("ascii"))
+        index_start = size - 12 - footer_len
+        index = json.loads(payload[index_start:size - 12].decode("utf-8"))
+
+        def read_entry(entry):
+            start = entry["offset"]
+            end = start + entry["length"]
+            return json.loads(payload[start:end].decode("utf-8"))
+
+        return {
+            "size": size,
+            "chunks": count,
+            "footerLength": footer_len,
+            "payloadBase64": base64.b64encode(payload).decode("ascii"),
+            "index": index,
+            "manifest": read_entry(index["manifest"]),
+            "chunk": read_entry(index["chunks"]["Test"]),
+        }
+
+
 def case_merge_fidelity(args):
     """Re-derive Sefaria's merge and compare against its own merged.json.
 
@@ -161,6 +404,11 @@ CASES = {
     "normalize_title": case_normalize_title,
     "schema": case_schema,
     "stage": case_stage,
+    "discover_nested": case_discover_nested,
+    "flatten_paths": case_flatten_paths,
+    "nested_book_build": case_nested_book_build,
+    "pipeline_smoke": case_pipeline_smoke,
+    "otzenpack": case_otzenpack,
     "merge_fidelity": case_merge_fidelity,
 }
 

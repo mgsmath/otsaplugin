@@ -93,6 +93,7 @@
   // ---- Ref parsing --------------------------------------------------------
 
   var RE_PEREK = new RegExp('\\u05e4\\u05e8\\u05e7\\s*(' + NUM_TOKEN + '|\\d+)'); // פרק
+  var RE_SIMAN = new RegExp('\\u05e1\\u05d9\\u05de\\u05df\\s*(' + NUM_TOKEN + '|\\d+)'); // סימן
   var RE_PASUK = new RegExp('\\u05e4\\u05e1\\u05d5\\u05e7\\s*(' + NUM_TOKEN + '|\\d+)'); // פסוק
   var RE_MISHNAH = new RegExp('\\u05de\\u05e9\\u05e0\\u05d4\\s*(' + NUM_TOKEN + '|\\d+)'); // משנה
   var RE_HALAKHA = new RegExp('\\u05d4\\u05dc\\u05db\\u05d4\\s*(' + NUM_TOKEN + '|\\d+)'); // הלכה
@@ -163,9 +164,9 @@
       return out;
     }
 
-    // Chapter level.
-    var perek = RE_PEREK.exec(s);
-    if (perek) out.chapter = NS.hebrewToInt(perek[1]);
+    // Chapter-level address. Mishnah Berurah and Shulchan Arukh use simanim.
+    var chapterMatch = (schema === 'siman' ? RE_SIMAN : RE_PEREK).exec(s);
+    if (chapterMatch) out.chapter = NS.hebrewToInt(chapterMatch[1]);
     var subRe = schema === 'mishnah' ? RE_MISHNAH : schema === 'halakha' ? RE_HALAKHA : schema === 'siman' ? RE_SEIF : RE_PASUK;
     var sub = subRe.exec(s);
     if (sub) out.sub = NS.hebrewToInt(sub[1]);
@@ -212,10 +213,21 @@
       .trim()
       .toLowerCase()
       .replace(/[\u05f3\u05f4'"\u2019\u2018\u00b4]/g, '')
+      .replace(/[,.\u003a;\u060c\u061b]/g, ' ')
       .replace(/\u05be/g, ' ');
     var parts = t.split(/\s+/);
-    while (parts.length && (parts[0] === '\u05de\u05e9\u05e0\u05d4' || parts[0] === '\u05de\u05e1\u05db\u05ea')) {
-      parts.splice(0, 1);
+    while (parts.length) {
+      if (parts[0] === '\u05de\u05e9\u05e0\u05d4' && parts[1] === '\u05ea\u05d5\u05e8\u05d4') {
+        parts.splice(0, 2); // Mishneh Torah / Rambam prefix
+      } else if (
+        parts[0] === '\u05de\u05e9\u05e0\u05d4' ||
+        parts[0] === '\u05de\u05e1\u05db\u05ea' ||
+        parts[0] === '\u05e8\u05de\u05d1\u05dd'
+      ) {
+        parts.splice(0, 1);
+      } else {
+        break;
+      }
     }
     return parts.join(' ').trim();
   };

@@ -45,6 +45,7 @@ from scope import (  # noqa: E402
 )
 from sefaria_text import (  # noqa: E402
     flatten_text,
+    flatten_text_with_paths,
     normalize_hebrew,
     rle_encode,
 )
@@ -54,8 +55,8 @@ PACK_FORMAT_VERSION = 1
 OPEN_LICENSES = {"public domain", "cc0", "cc-by", "cc-by-sa"}
 NC_LICENSES = {"cc-by-nc"}
 
-# Licence families the Credits screen groups under, with the obligation each one
-# carries. Kept in the manifest so the runtime never hardcodes licence text.
+# Licence-family metadata is retained for internal provenance and maintainer
+# reports; the reader UI does not display a source/licence browser.
 LICENSE_FAMILY = {
     "public domain": "pd",
     "cc0": "pd",
@@ -83,21 +84,27 @@ def _load_json(path: str):
 
 
 def discover_book_dirs(export_root: str, stages: List[str], only_titles: Optional[List[str]]) -> List[Tuple[str, str, str]]:
-    """Return ``[(rel_dir, abs_dir, stage), ...]`` for the requested stages."""
+    """Return work directories under the selected roots, walking nested categories."""
     from scope import STAGE_GLOBS
 
     out: List[Tuple[str, str, str]] = []
     seen = set()
     for stage in stages:
-        for pattern in STAGE_GLOBS.get(stage, []):
-            for d in sorted(glob.glob(os.path.join(export_root, pattern))):
-                if not os.path.isdir(os.path.join(d, "English")):
+        for root in STAGE_GLOBS.get(stage, []):
+            start = os.path.join(export_root, root)
+            if not os.path.isdir(start):
+                continue
+            for current, dirs, _files in os.walk(start):
+                # English/Hebrew are data folders, never book/category roots.
+                dirs[:] = sorted(d for d in dirs if d not in ("English", "Hebrew"))
+                if not os.path.isdir(os.path.join(current, "English")):
                     continue
-                rel = os.path.relpath(d, export_root)
+                rel = os.path.relpath(current, export_root)
                 if rel in seen:
                     continue
                 seen.add(rel)
-                out.append((rel, d, stage))
+                out.append((rel, current, stage))
+    out.sort(key=lambda row: (STAGE_ORDER.index(row[2]), row[0].casefold()))
     if only_titles:
         want = {t.strip() for t in only_titles if t.strip()}
         out = [r for r in out if os.path.basename(r[1]) in want]
@@ -153,12 +160,7 @@ def version_is_usable(v: dict, keep: set) -> Tuple[bool, str]:
 
 
 def merge_versions(versions: List[dict], shape: List[List[str]]) -> Tuple[List[List[Tuple[str, int]]], List[int]]:
-    """Per-segment mosaic by priority.
-
-    Returns ``(merged, used_indices)`` where ``merged[chapter][i]`` is
-    ``(text, version_index_or_-1)`` and ``used_indices`` lists every version that
-    contributed at least one segment, most-contributing first.
-    """
+    """Per-segment mosaic for the legacy two-dimensional helper API."""
     merged: List[List[Tuple[str, int]]] = [[("", -1) for _ in ch] for ch in shape]
     counts: Dict[int, int] = {}
     for vi in range(len(versions)):
@@ -174,6 +176,62 @@ def merge_versions(versions: List[dict], shape: List[List[str]]) -> Tuple[List[L
                     counts[vi] = counts.get(vi, 0) + 1
     used = [vi for vi, _ in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))]
     return merged, used
+
+
+def merge_versions_by_path(version_rows, shape_rows):
+    """Merge versions by their nested Sefaria address, not flattened position.
+
+    This keeps a commentator's text on the same verse/mishnah/halakhah when one
+    version omits a comment that another version contains.
+    """
+    merged = [[(path, "", -1) for path, _text in row] for row in shape_rows]
+    indexes = [{path: i for i, (path, _text) in enumerate(row)} for row in shape_rows]
+    counts: Dict[int, int] = {}
+    for version_index, rows in enumerate(version_rows):
+        for unit_index, row in enumerate(rows[:len(merged)]):
+            for path, text in row:
+                target = indexes[unit_index].get(path)
+                if target is None or not isinstance(text, str) or not text.strip():
+                    continue
+                old_path, old_text, _old_version = merged[unit_index][target]
+                if not old_text:
+                    merged[unit_index][target] = (old_path, text, version_index)
+                    counts[version_index] = counts.get(version_index, 0) + 1
+    used = [index for index, _ in sorted(counts.items(), key=lambda item: (-item[1], item[0]))]
+    return merged, used
+
+
+def schema_for_version(version: dict, rel: str) -> str:
+    """Infer the reader address style, including Sefaria's complex schema exports."""
+    section_names = version.get("sectionNames") or []
+    if not section_names:
+        schema_node = version.get("schema") or {}
+
+        def find_section_names(node):
+            if not isinstance(node, dict):
+                return []
+            names = node.get("sectionNames")
+            if isinstance(names, list) and names:
+                return names
+            for child in node.get("nodes") or []:
+                found = find_section_names(child)
+                if found:
+                    return found
+            return []
+
+        section_names = find_section_names(schema_node)
+    if section_names:
+        return schema_of_section_names(section_names, len(section_names))
+
+    identity = " ".join(
+        [str(rel or ""), str(version.get("title") or ""), str(version.get("heTitle") or "")]
+        + [str(c) for c in (version.get("categories") or [])]
+    ).casefold()
+    if "mishnah berurah" in identity or "shulchan arukh" in identity or "seif" in identity:
+        return "siman"
+    if "mishneh torah" in identity or "משנה תורה" in identity:
+        return "halakha"
+    return "chapter"
 
 
 # ---------------------------------------------------------------------------
@@ -203,21 +261,23 @@ def build_book(rel: str, abs_dir: str, stage: str, keep: set, want_fidelity: boo
 
     usable.sort(key=version_sort_key)
 
-    # Shape comes from the version that carries the most chapters, so a partial
-    # translation can never shorten the address space of the work.
-    shapes = [flatten_text(v.get("text")) for v in usable]
-    shape = max(shapes, key=lambda s: (len(s), sum(len(c) for c in s)))
+    # Use the most complete version as a shape template, retaining nested verse /
+    # mishnah / halakhah / comment addresses so partial versions merge safely.
+    version_rows = [flatten_text_with_paths(v.get("text")) for v in usable]
+    shape_rows = max(version_rows, key=lambda rows: (len(rows), sum(len(row) for row in rows)))
+    merged, used = merge_versions_by_path(version_rows, shape_rows)
 
-    merged, used = merge_versions(usable, shape)
-
-    # Hebrew: Sefaria's own merged text, normalised, used for the alignment check
-    # and as the labelled fallback Hebrew source.
-    he_segments: List[List[str]] = []
+    # Hebrew pack text is used for selection matching and as a quiet fallback
+    # whenever the reader's own Hebrew cannot be aligned to the English entries.
+    he_rows = []
     he_titles: List[str] = []
     if os.path.exists(he_merged_path):
         try:
             he = _load_json(he_merged_path)
-            he_segments = [[normalize_hebrew(s) for s in ch] for ch in flatten_text(he.get("text"))]
+            he_rows = [
+                [(path, normalize_hebrew(text)) for path, text in row]
+                for row in flatten_text_with_paths(he.get("text"))
+            ]
             he_titles = [str(x[0]) for x in (he.get("versions") or []) if isinstance(x, list) and x]
         except Exception as exc:  # pragma: no cover
             sys.stderr.write(f"  ! {rel}: Hebrew merged unreadable: {exc}\n")
@@ -258,7 +318,11 @@ def build_book(rel: str, abs_dir: str, stage: str, keep: set, want_fidelity: boo
 
     sample = usable[0]
     section_names = sample.get("sectionNames") or []
-    schema = schema_of_section_names(section_names, len(section_names))
+    schema = schema_for_version(sample, rel)
+    if not section_names and schema == "siman":
+        section_names = ["Siman", "Seif"]
+    elif not section_names and schema == "halakha":
+        section_names = ["Chapter", "Halakhah"]
 
     units = []
     aligned_units = 0
@@ -275,24 +339,26 @@ def build_book(rel: str, abs_dir: str, stage: str, keep: set, want_fidelity: boo
         notes: List[List[str]] = []
         prov: List[int] = []
         heb: List[str] = []
-        he_ch = he_segments[ci] if ci < len(he_segments) else []
-        for si, (raw, vi) in enumerate(chapter):
+        groups: List[int] = []
+        he_row = he_rows[ci] if ci < len(he_rows) else []
+        he_by_path = {path: text for path, text in he_row}
+        for path, raw, vi in chapter:
             safe, seg_notes = sanitize_english(raw)
             eng.append(safe)
-            if seg_notes:
-                notes.append(seg_notes)
-                notes_total += len(seg_notes)
+            notes.append(seg_notes)
+            notes_total += len(seg_notes)
             prov.append(vi if vi >= 0 else -1)
-            heb.append(he_ch[si] if si < len(he_ch) else "")
+            heb.append(he_by_path.get(path, ""))
+            groups.append(path[0] if path else len(groups) + 1)
             if vi >= 0:
                 per_source_segments[vi] = per_source_segments.get(vi, 0) + 1
             else:
                 missing_segments += 1
         total_segments += len(eng)
-        # Alignment is asserted per unit: only claim a 1:1 Hebrew/English pairing
-        # when the counts agree and no side is blank.
+        # Only claim exact 1:1 alignment when the same nested addresses exist and
+        # neither the English nor Hebrew entry is blank.
         unit_aligned = (
-            len(he_ch) == len(eng)
+            len(he_row) == len(chapter)
             and all(h for h in heb)
             and all(e for e in eng)
         )
@@ -306,7 +372,9 @@ def build_book(rel: str, abs_dir: str, stage: str, keep: set, want_fidelity: boo
             "p": rle_encode(prov),
             "al": 1 if unit_aligned else 0,
         }
-        if notes:
+        if any(len(path) > 1 for path, _raw, _vi in chapter):
+            unit["g"] = rle_encode(groups)
+        if any(notes):
             unit["n"] = notes
         if unit_aligned:
             unit["h"] = heb
@@ -376,10 +444,17 @@ def normalize_title(title: str) -> str:
     t = (title or "").strip().lower()
     for ch in (_GERSHAYIM, _GERESH, "'", '"', "\u2019", "\u2018", "\u00b4"):
         t = t.replace(ch, "")
+    for ch in (",", ".", ":", ";", "\u060c", "\u061b"):
+        t = t.replace(ch, " ")
     t = t.replace("\u05be", " ")
     parts = t.split()
-    while parts and parts[0] in ("\u05de\u05e9\u05e0\u05d4", "\u05de\u05e1\u05db\u05ea"):
-        parts = parts[1:]
+    while parts:
+        if parts[:2] == ["\u05de\u05e9\u05e0\u05d4", "\u05ea\u05d5\u05e8\u05d4"]:
+            parts = parts[2:]
+        elif parts[0] in ("\u05de\u05e9\u05e0\u05d4", "\u05de\u05e1\u05db\u05ea", "\u05e8\u05de\u05d1\u05dd"):
+            parts = parts[1:]
+        else:
+            break
     return " ".join(parts).strip()
 
 
@@ -423,6 +498,18 @@ CATEGORY_HE = {
     "Writings": "כתובים",
     "Mishnah": "משנה",
     "Talmud": "תלמוד",
+    "Halakhah": "הלכה",
+    "Musar": "מוסר",
+    "Commentary": "מפרשים",
+    "Acharonim on Tanakh": "אחרונים על תנ״ך",
+    "Rishonim on Tanakh": "ראשונים על תנ״ך",
+    "Modern Commentary on Tanakh": "פרשנות מודרנית לתנ״ך",
+    "Acharonim on Mishnah": "אחרונים על משנה",
+    "Rishonim on Mishnah": "ראשונים על משנה",
+    "Modern Commentary on Mishnah": "פרשנות מודרנית למשנה",
+    "Mishneh Torah": "משנה תורה",
+    "Shulchan Arukh": "שולחן ערוך",
+    "Mishnah Berurah": "משנה ברורה",
     "Bavli": "בבלי",
     "Yerushalmi": "ירושלמי",
     "Seder Zeraim": "סדר זרעים",
@@ -493,13 +580,14 @@ def main(argv=None) -> int:
     ap.add_argument("--out", required=True, help="pack output directory")
     ap.add_argument("--plugin-data", default=None, help="where to write the <script> data files (default: <out>/../plugin/data)")
     ap.add_argument("--reports", default="reports")
-    ap.add_argument("--stages", default="tanakh,mishnah")
-    ap.add_argument("--talmud", default="", help="comma-separated tractate directory names (limits stage 3)")
+    ap.add_argument("--stages", default=",".join(STAGE_ORDER), help="comma-separated export sections (default: all supported sections)")
+    ap.add_argument("--talmud", default="", help="optional comma-separated Talmud work names to limit the talmud stage")
     ap.add_argument("--policy", choices=["open", "include-nc"], default="open")
     ap.add_argument("--overrides", default=None, help="JSON overrides file (default: build/otzaria_title_overrides.json)")
     ap.add_argument("--commit", default="unknown", help="Sefaria-Export commit hash to record")
     ap.add_argument("--commit-date", default="unknown")
     ap.add_argument("--no-fidelity", action="store_true")
+    ap.add_argument("--no-plugin-scripts", action="store_true", help="write JSON pack files only (for external .otzenpack libraries)")
     ap.add_argument("--chunk-target-bytes", type=int, default=24 * 1024, help="soft cap per chunk file")
     args = ap.parse_args(argv)
 
@@ -571,10 +659,12 @@ def main(argv=None) -> int:
     os.makedirs(args.out, exist_ok=True)
     chunks_dir = os.path.join(args.out, "chunks")
     os.makedirs(chunks_dir, exist_ok=True)
-    plugin_data = args.plugin_data or os.path.join(os.path.dirname(args.out.rstrip("/")), "plugin", "data")
-    os.makedirs(plugin_data, exist_ok=True)
-    for old in glob.glob(os.path.join(plugin_data, "chunk-*.js")):
-        os.remove(old)
+    plugin_data = None
+    if not args.no_plugin_scripts:
+        plugin_data = args.plugin_data or os.path.join(os.path.dirname(args.out.rstrip("/")), "plugin", "data")
+        os.makedirs(plugin_data, exist_ok=True)
+        for old in glob.glob(os.path.join(plugin_data, "chunk-*.js")):
+            os.remove(old)
 
     book_entries: Dict[str, dict] = {}
     sizes = {"manifest": 0, "chunks": 0, "jsManifest": 0, "jsChunks": 0}
@@ -583,11 +673,12 @@ def main(argv=None) -> int:
         safe = key.replace("/", "_").replace(" ", "_")
         chunk_payload = {"book": key, "units": b["units"]}
         sizes["chunks"] += _write_json(os.path.join(chunks_dir, safe + ".json"), chunk_payload)
-        sizes["jsChunks"] += write_js_wrapper(
-            os.path.join(plugin_data, "chunk-" + safe + ".js"),
-            "window.__OTZ_EN.chunk(%s," % json.dumps(safe),
-            chunk_payload,
-        )
+        if plugin_data:
+            sizes["jsChunks"] += write_js_wrapper(
+                os.path.join(plugin_data, "chunk-" + safe + ".js"),
+                "window.__OTZ_EN.chunk(%s," % json.dumps(safe),
+                chunk_payload,
+            )
         book_entries[key] = {
             "he": b["heTitle"],
             "cat": b["categories"],
@@ -632,9 +723,10 @@ def main(argv=None) -> int:
         },
     }
     sizes["manifest"] = _write_json(os.path.join(args.out, "manifest.json"), manifest)
-    sizes["jsManifest"] = write_js_wrapper(
-        os.path.join(plugin_data, "manifest.js"), "window.__OTZ_EN.manifest(", manifest
-    )
+    if plugin_data:
+        sizes["jsManifest"] = write_js_wrapper(
+            os.path.join(plugin_data, "manifest.js"), "window.__OTZ_EN.manifest(", manifest
+        )
 
     write_reports(args.reports, manifest, books, skipped, sizes, args, time.time() - started)
     sys.stderr.write(

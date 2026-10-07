@@ -10,8 +10,9 @@
   var Ref = NS.Ref;
   var App = (NS.App = {});
 
-  // The context-menu item id declared in manifest.json.
-  var MENU_ID = 'english-translation'; // must match manifest.json contributes.startup
+  // Context-menu item ids declared in manifest.json.
+  var MENU_PEEK_ID = 'english-translation';
+  var MENU_SPLIT_ID = 'english-translation-split';
 
   var state = {
     manifest: null,
@@ -20,10 +21,10 @@
     chunk: null,
     view: null,
     entry: 'reader', // 'peek' | 'reader'
-    otzariaText: null,
-    otzariaAlignment: null,
     lastRef: null,
     lastBookId: null,
+    lastTitle: null,
+    lastUnitAddress: null,
     treePromise: null,
     renderToken: 0,
   };
@@ -59,54 +60,62 @@
         });
     });
 
-    // Entry point A: the declarative context-menu item. The manifest declares it
-    // with openPlugin:true, so the click is queued and delivered after boot even
-    // though this plugin runs no background instance.
+    // The two declarative context-menu actions are delivered after boot without
+    // needing a background instance. The second opens the built-in split view.
     window.Otzaria.on('reader.context_menu_item_clicked', function (payload) {
       payload = payload || {};
+      var param = payload.param;
+      var itemId = payload.itemId;
+      var view = param === 'split' || itemId === MENU_SPLIT_ID ? 'sidebyside' : 'peek';
+      if (itemId && itemId !== MENU_PEEK_ID && itemId !== MENU_SPLIT_ID) return;
       state.entry = 'peek';
-      App.show({
-        bookTitle: payload.currentBook,
-        bookId: payload.currentBookId,
-        ref: payload.currentRef,
-        selection: payload.selectedText,
-        entry: 'peek',
-      });
+      state.view = view;
+      var req = readerLocation(payload);
+      req.selection = payload.selectedText || payload.selection || '';
+      req.entry = 'peek';
+      App.show(req);
     });
 
     window.Otzaria.on('plugin.page_opened', function (payload) {
       payload = payload || {};
-      if (payload.param && payload.param.entry) state.entry = payload.param.entry;
+      var param = payload.param || {};
+      if (param.entry === 'peek' || param.entry === 'reader') state.entry = param.entry;
+      if (param.view && NS.Views[param.view]) state.view = param.view;
     });
 
-    // Entry point B: follow the reader, if the user turned it on.
+    // Entry point B: follow the reader. The location normalizer accepts both
+    // current and older SDK payload spellings, so missing optional fields do not
+    // break updates.
     window.Otzaria.on('reader.current_ref_changed', function (payload) {
       if (!NS.settings.follow) return;
-      payload = payload || {};
+      var req = readerLocation(payload || {});
+      if (!req.bookTitle && !req.bookId && !req.ref) return;
       state.entry = 'reader';
-      App.show({
-        bookTitle: payload.bookTitle || payload.currentBook,
-        bookId: payload.bookId,
-        ref: payload.ref || payload.currentRef,
-        entry: 'reader',
-      });
+      state.view = null;
+      req.entry = 'reader';
+      App.show(req);
     });
   };
 
-  function openDefault() {
-    // Whatever the reader has open right now.
+  function openDefault(viewOverride) {
+    // Read the location on demand instead of relying on the last event; this
+    // keeps the Translate and Split view buttons useful even when follow is off.
+    state.entry = 'reader';
+    state.view = viewOverride && NS.Views[viewOverride] ? viewOverride : null;
     return window.Otzaria
       .call('reader.getCurrentRef')
       .then(function (res) {
         var data = NS.unwrap(res, 'reader.getCurrentRef');
-        state.entry = NS.settings.viewForContext && NS.settings.viewForContext.reader ? 'reader' : 'reader';
-        return App.show({
-          bookTitle: data && data.bookTitle,
-          bookId: data && (data.bookId || data.bookUid),
-          ref: data && data.ref,
-          sectionIndex: data && data.index,
-          entry: 'reader',
-        });
+        var req = readerLocation(data || {});
+        req.entry = 'reader';
+        if (!req.bookTitle && !req.bookId) {
+          NS.setStatus(
+            NS.t('אין ספר פתוח בקורא. בחר קטע בטקסט ובחר „תרגום לאנגלית” בתפריט, או פתח ספר בקורא.'),
+            'info'
+          );
+          return null;
+        }
+        return App.show(req);
       })['catch'](function (err) {
         NS.setStatus(
           NS.t('אין ספר פתוח בקורא. בחר קטע בטקסט ובחר „תרגום לאנגלית” בתפריט, או פתח ספר בקורא.'),
@@ -114,6 +123,24 @@
         );
         NS.log('getCurrentRef failed', err && err.code);
       });
+  }
+
+  function readerLocation(data) {
+    data = data || {};
+    var book = data.bookTitle || data.currentBook || data.book || data.title || '';
+    if (book && typeof book === 'object') book = book.title || book.name || book.bookTitle || '';
+    var bookId = data.bookId || data.currentBookId || data.bookUid || data.uid || '';
+    var ref = data.ref || data.currentRef || data.reference || data.currentReference || '';
+    if (ref && typeof ref === 'object') ref = ref.ref || ref.reference || ref.title || '';
+    var sectionIndex = data.sectionIndex;
+    if (sectionIndex === undefined || sectionIndex === null) sectionIndex = data.index;
+    return {
+      bookTitle: String(book || bookId || ''),
+      bookId: bookId ? String(bookId) : '',
+      ref: ref ? String(ref) : '',
+      sectionIndex: sectionIndex,
+      selection: data.selectedText || data.selection || '',
+    };
   }
 
   // ---- book resolution ----------------------------------------------------
@@ -240,15 +267,24 @@
 
       var focus = null;
       if (parsed.level === 'sub' && parsed.sub !== null) {
-        var idx = parsed.sub - 1;
-        if (idx >= 0 && idx < unit.e.length) focus = idx;
+        if (unit.g && unit.g.length) {
+          var groups = NS.expandRuns(unit.g, unit.e.length, -1);
+          for (var gi = 0; gi < groups.length; gi++) {
+            if (groups[gi] === parsed.sub) {
+              focus = gi;
+              break;
+            }
+          }
+        } else {
+          var idx = parsed.sub - 1;
+          if (idx >= 0 && idx < unit.e.length) focus = idx;
+        }
       }
       if (focus === null && req.selection) {
         var located = Ref.locateSegment(unit, req.selection);
         if (located && located.index >= 0) focus = located.index;
-        else if (NS.settings.entry === 'peek') {
-          // The selection could not be tied to a segment. Show the whole unit
-          // rather than a guess.
+        else if (state.entry === 'peek') {
+          // If the selection cannot be mapped safely, show the whole unit.
           NS.flashNotice(NS.t('הקטע שנבחר לא זוהה בוודאות — מוצג הקטע כולו'));
         }
       }
@@ -265,12 +301,12 @@
    * Hebrew to show next to the English.
    *
    * Preferred: Otzaria's own section text, aligned letter-for-letter to the
-   * pack's segments (see js/align.js). If the alignment is not exact we do NOT
-   * re-split it; we hand back the pack's Sefaria Hebrew and label it.
+   * pack's segments (see js/align.js). If it cannot be aligned exactly, use the
+   * packed Hebrew when available and keep the fallback quiet in the reader UI.
    */
   function hebrewForUnit(book, unit, req, parsed) {
-    if (NS.settings.hebrewSource !== 'otzaria' || !window.Otzaria) {
-      return Promise.resolve({ text: unit.h || null, source: 'sefaria', aligned: !!unit.h });
+    if (!window.Otzaria) {
+      return Promise.resolve({ text: unit.h || null, source: 'pack', aligned: !!unit.h });
     }
     var sectionIndex =
       req.sectionIndex !== undefined && req.sectionIndex !== null
@@ -292,12 +328,12 @@
         if (!text) throw new Error('no source text');
         var alignment = NS.alignHebrew(text, unit.h || []);
         var slices = NS.sliceAligned(text, alignment);
-        if (slices) return { text: slices, source: 'otzaria', aligned: true, headerPrefix: alignment.headerPrefix };
-        NS.log('hebrew alignment failed:', alignment.reason);
-        return { text: unit.h || null, source: 'sefaria', aligned: !!unit.h, reason: alignment.reason };
+        if (slices) return { text: slices, source: 'reader', aligned: true };
+        NS.log('reader Hebrew could not be aligned; using packed Hebrew:', alignment.reason);
+        return { text: unit.h || null, source: 'pack', aligned: !!unit.h };
       })['catch'](function (err) {
-        NS.log('getSectionTextMap unavailable, using pack Hebrew', err && err.code);
-        return { text: unit.h || null, source: 'sefaria', aligned: !!unit.h, reason: err && err.message };
+        NS.log('getSectionTextMap unavailable; using packed Hebrew', err && err.code);
+        return { text: unit.h || null, source: 'pack', aligned: !!unit.h };
       });
   }
 
@@ -321,24 +357,20 @@
       // Whole unit, but scrolled to the verse the reader is on.
     }
 
-    var provenance = NS.expandProvenance(unit.p, n);
+    var segmentGroups = unit.g ? NS.expandRuns(unit.g, n, -1) : null;
     var ctxObj = {
       host: NS.renderHost(),
-      manifest: state.manifest,
       book: book,
-      bookKey: state.bookKey,
       chunk: state.chunk,
       unit: unit,
       from: from,
       to: to,
       focus: focus,
-      provenance: provenance,
+      segmentGroups: segmentGroups,
       hebrew: hebrew.text,
-      hebrewSource: hebrew.source,
       options: {
         numbers: NS.settings.numbers,
         order: NS.settings.order,
-        creditLine: NS.settings.creditLine,
         density: NS.settings.density,
       },
       notesFor: function (i) {
@@ -347,21 +379,16 @@
     };
 
     NS.renderHost().textContent = '';
+    state.lastUnitAddress = unit.a[0];
     NS.setHeader(NS.Views.unitLabel(book, unit), book.he + ' · ' + (req.ref || ''));
 
-    if (hebrew.source === 'sefaria' && unit.h && unit.h.length && view !== 'english' && view !== 'flowing') {
-      NS.flashNotice(
-        NS.t('העברית המוצגת היא של ספריא (מנורמלת), לא הטקסט של אוצריא') +
-          (hebrew.reason ? ' — ' + hebrew.reason : '')
-      );
-    }
     if (book.missing > 0) {
       var missingInUnit = 0;
       for (var i = 0; i < n; i++) if (!unit.e[i]) missingInUnit++;
       if (missingInUnit > 0) {
         NS.flashNotice(
-          NS.t('לקטע זה אין תרגום ברשיון מתאים עבור חלק מהשורות') + ' (' + missingInUnit + '/' + n + ')',
-          'warn'
+          NS.t('חלק מהשורות ללא תרגום') + ' (' + missingInUnit + '/' + n + ')',
+          'info'
         );
       }
     }
@@ -385,19 +412,23 @@
   // ---- view switching -----------------------------------------------------
 
   App.currentView = function () {
-    if (state.view) return state.view;
+    if (state.view && NS.Views[state.view]) return state.view;
     var perEntry = (NS.settings.viewForContext || {})[state.entry];
-    if (perEntry) return perEntry;
+    if (perEntry && NS.Views[perEntry]) return perEntry;
     return state.entry === 'peek' ? 'peek' : 'sidebyside';
   };
 
   App.setView = function (view) {
+    if (!NS.Views[view]) return;
     state.view = view;
+    NS.settings.viewForContext = NS.settings.viewForContext || {};
+    NS.settings.viewForContext[state.entry] = view;
+    NS.saveSettings();
     applySettingsToChrome();
     if (state.chunk && state.book) {
       App.show({
-        // The title the user actually resolved, so an ambiguous title does not
-        // prompt again on every view switch.
+        // Keep the reader's actual id so opening the source text works even
+        // when Otzaria uses an id different from the displayed title.
         bookTitle: state.lastTitle || state.book.he,
         bookId: state.lastBookId || state.book.he,
         ref: state.lastRef,
@@ -433,25 +464,30 @@
       }
     }
     on('btn-follow', 'click', App.toggleFollow);
+    on('btn-translate', 'click', function () {
+      openDefault();
+    });
+    on('btn-split', 'click', function () {
+      openDefault('sidebyside');
+    });
     on('btn-options', 'click', function () {
       NS.showPanel(NS.panelOpen === 'options' ? null : 'options');
-    });
-    on('btn-credits', 'click', function () {
-      NS.openCredits(state.bookKey, state.lastUnitAddress);
     });
     on('btn-reader', 'click', function () {
       if (!state.book) return;
       window.Otzaria
-        .call('reader.openBookAtRef', { bookId: state.book.he, ref: state.lastRef || '' })['catch'](
-        function (err) {
+        .call('reader.openBookAtRef', {
+          bookId: state.lastBookId || state.book.he,
+          ref: state.lastRef || '',
+        })
+        .then(function (res) {
+          return NS.unwrap(res, 'reader.openBookAtRef');
+        })['catch'](function (err) {
           NS.log('openBookAtRef failed', err && err.code);
-        }
-      );
+          NS.setStatus('Could not open this text in the reader' + (err && err.message ? ': ' + err.message : ''), 'error');
+        });
     });
     on('panel-close', 'click', function () {
-      NS.showPanel(null);
-    });
-    on('panel-close-2', 'click', function () {
       NS.showPanel(null);
     });
     var scrimEl = document.getElementById('scrim');
@@ -465,23 +501,14 @@
       NS.saveSettings();
       App.setView(App.currentView());
     });
-    on('opt-credit', 'change', function (ev) {
-      NS.settings.creditLine = ev.target.checked;
-      NS.saveSettings();
-      App.setView(App.currentView());
-    });
     on('opt-order', 'change', function (ev) {
       NS.settings.order = ev.target.value;
       NS.saveSettings();
       App.setView(App.currentView());
     });
-    on('opt-hebrew', 'change', function (ev) {
-      NS.settings.hebrewSource = ev.target.value;
-      NS.saveSettings();
-      App.setView(App.currentView());
-    });
     on('opt-context', 'change', function (ev) {
-      NS.settings.revealContext = Math.max(0, Math.min(10, parseInt(ev.target.value, 10) || 2));
+      var parsed = parseInt(ev.target.value, 10);
+      NS.settings.revealContext = Math.max(0, Math.min(10, isNaN(parsed) ? 2 : parsed));
       NS.saveSettings();
       App.setView(App.currentView());
     });
@@ -529,10 +556,13 @@
       follow.setAttribute('aria-pressed', NS.settings.follow ? 'true' : 'false');
       follow.textContent = NS.settings.follow ? NS.t('עוקב אחרי הקורא: פעיל') : NS.t('עקוב אחרי הקורא');
     }
+    var split = document.getElementById('btn-split');
+    if (split) {
+      split.classList.toggle('active', view === 'sidebyside');
+      split.setAttribute('aria-pressed', view === 'sidebyside' ? 'true' : 'false');
+    }
     setChecked('opt-numbers', NS.settings.numbers);
-    setChecked('opt-credit', NS.settings.creditLine);
     setValue('opt-order', NS.settings.order);
-    setValue('opt-hebrew', NS.settings.hebrewSource);
     setValue('opt-context', String(NS.settings.revealContext));
     var root = document.documentElement;
     root.classList.toggle('density-compact', NS.settings.density === 'compact');
@@ -575,8 +605,7 @@
     el.textContent =
       (NS.Data.mode() === 'imported' ? NS.t('חבילה מיובאת') : NS.t('חבילה מובנית')) +
       ' · ' +
-      manifest.stats.books + ' ' + NS.t('ספרים') +
-      ' · ' + manifest.policy;
+      manifest.stats.books + ' ' + NS.t('ספרים');
   };
 
   var noticeTimer = null;
@@ -636,11 +665,7 @@
     var p = document.createElement('p');
     p.appendChild(
       document.createTextNode(
-        (title || '') +
-          ' — ' +
-          NS.t(
-            'החבילה כוללת רק תרגומים ברשיון המאפשר הפצה. ייתכן שלספר זה אין תרגום כזה בספריא.'
-          )
+        (title ? title + ' — ' : '') + NS.t('נסה לטעון ספריית תרגום מורחבת בהגדרות.')
       )
     );
     box.appendChild(p);
@@ -685,7 +710,7 @@
         b.appendChild(label);
         var sub = document.createElement('span');
         sub.className = 'choice-sub';
-        sub.appendChild(document.createTextNode((book.catHe || book.cat || []).join(' › ')));
+        sub.appendChild(document.createTextNode((book.cat || book.catHe || []).join(' › ')));
         b.appendChild(sub);
         b.addEventListener('click', function () {
           state.manifest.titleIndex[NS.normalizeTitle(req.bookTitle)] = key; // sticky for this session
@@ -738,7 +763,7 @@
         book.he +
           ' ' + (req.ref || '') +
           ' — ' +
-          NS.t('לקטע זה אין תרגום ברשיון מתאים בחבילה.')
+          NS.t('אין תרגום לקטע זה')
       )
     );
     box.appendChild(p);
@@ -747,7 +772,7 @@
       note.className = 'note';
       note.appendChild(
         document.createTextNode(
-          NS.t('בספר זה חסרים') + ' ' + book.missing + ' ' + NS.t('קטעים ללא תרגום ברשיון מתאים')
+          book.missing + ' ' + NS.t('קטעים ללא תרגום')
         )
       );
       box.appendChild(note);
@@ -768,7 +793,7 @@
     var keys = Object.keys(state.manifest.books).sort();
     for (var i = 0; i < keys.length; i++) {
       var b = state.manifest.books[keys[i]];
-      var cat = (b.catHe && b.catHe[0]) || (b.cat && b.cat[0]) || '';
+      var cat = (b.cat && b.cat[0]) || (b.catHe && b.catHe[0]) || '';
       if (!byCat[cat]) byCat[cat] = [];
       byCat[cat].push(b);
     }

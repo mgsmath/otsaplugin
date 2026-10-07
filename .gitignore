@@ -1,0 +1,9 @@
+# Generated build outputs — produced by build/pipeline.py and build/pack_plugin.py.
+dist/
+plugin/data/
+build/__pycache__/
+*.pyc
+
+# Editor / OS noise
+.DS_Store
+*.swp

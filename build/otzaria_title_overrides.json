@@ -1,0 +1,16 @@
+{
+  "_comment": [
+    "Hand-maintained Otzaria<->Sefaria title overrides.",
+    "The generated title index already covers Sefaria's own heTitle plus mechanical",
+    "aliases (a leading 'משנה'/'מסכת' is dropped, gershayim/geresh/quotes are removed).",
+    "Add an entry here ONLY after checking the real name against library.getTree in a",
+    "running Otzaria - see docs/MAPPING.md and reports/coverage.md.",
+    "",
+    "byOtzariaTitle : Otzaria book title (as returned by library.getTree) -> Sefaria work title",
+    "aliases        : Sefaria work title -> extra titles that should resolve to it",
+    "excludedOtzariaTitles : Otzaria titles to never map (e.g. a PDF facsimile of the same work)"
+  ],
+  "byOtzariaTitle": {},
+  "aliases": {},
+  "excludedOtzariaTitles": []
+}

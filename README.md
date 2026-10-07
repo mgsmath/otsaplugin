@@ -43,6 +43,10 @@ export archive.
 
 ## Build, test, pack
 
+> **GitHub Codespaces:** this repo ships a dev container (Python + Node, nothing
+> to install). Open it as a codespace, fetch the Sefaria export into `ref/`, and
+> run `./build/build_all.sh`. Walkthrough: [docs/CODESPACES.md](docs/CODESPACES.md).
+
 ```sh
 # 1. Build the data pack (pinned Sefaria export commit) into plugin/data + dist/pack
 python3 build/pipeline.py --export-root /path/to/Sefaria-Export-Archive \

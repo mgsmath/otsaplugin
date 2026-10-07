@@ -4,6 +4,9 @@ plugin/data/
 build/__pycache__/
 *.pyc
 
+# Local Sefaria-Export-Archive checkout (multi-GB; fetched per docs/CODESPACES.md).
+ref/
+
 # Editor / OS noise
 .DS_Store
 *.swp

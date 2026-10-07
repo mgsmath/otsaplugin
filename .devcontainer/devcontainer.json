@@ -1,0 +1,33 @@
+{
+  "name": "otsaplugin (Python + Node)",
+  "image": "mcr.microsoft.com/devcontainers/python:3.12",
+  "features": {
+    "ghcr.io/devcontainers/features/node:1": {
+      "version": "lts"
+    }
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-python.python",
+        "ms-python.vscode-pylance"
+      ],
+      "settings": {
+        "python.defaultInterpreterPath": "/usr/local/bin/python3",
+        "files.exclude": {
+          "**/__pycache__": true,
+          "**/ref": true,
+          "**/dist": true,
+          "**/plugin/data": true
+        },
+        "search.exclude": {
+          "**/__pycache__": true,
+          "**/ref": true,
+          "**/dist": true,
+          "**/plugin/data": true
+        }
+      }
+    }
+  },
+  "postCreateCommand": "echo 'otsaplugin codespace ready (Python + Node, nothing to install).' && echo 'Next: fetch the Sefaria export into ref/ (see docs/CODESPACES.md), then run: ./build/build_all.sh'"
+}

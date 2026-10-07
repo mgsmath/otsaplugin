@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "org.sefaria.otzaria-english",
   "name": "תרגום אנגלית",
-  "version": "1.0.0",
+  "version": "0.0.1",
   "description": "English translations from Sefaria for whatever you are reading in Otzaria. Six view modes, fully offline, per-passage source attribution.",
   "author": "otsaplugin contributors",
   "homepage": "https://github.com/mgsmath/otsaplugin",

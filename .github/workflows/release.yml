@@ -1,0 +1,224 @@
+name: Release
+
+# Cut a release every time a pull request is merged into main, and on demand.
+#
+# Version numbers come from the repository's own tags: the newest v*.*.* tag
+# with its patch component bumped by one, or v0.0.1 when there is no tag yet
+# (build/version.py). Nothing is ever released unbuilt — the pack is built from
+# the pinned Sefaria export first, and only a successful build gets a tag.
+#
+# pull_request_target, not pull_request: this job pushes a tag, commits the
+# version bump back to main and creates a release, which all need a write-scoped
+# token. pull_request runs with a read-only one. It is safe here because the job
+# checks out main — the merged result — and never PR code, so nothing unreviewed
+# ever runs with those permissions.
+#
+# There is no loop risk: GitHub does not start workflows for pushes made with
+# GITHUB_TOKEN, and neither trigger listens for pushes.
+
+on:
+  pull_request_target:
+    types: [closed]
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+# One release at a time. Two merges landing together must not race for the same
+# version number, so later runs queue instead of cancelling the one in flight.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build and publish
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      EXPORT_ROOT: ref/Sefaria-Export-Archive
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # Untrusted text (a PR title can contain anything) is passed through env,
+      # never interpolated straight into a shell script.
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      PR_TITLE: ${{ github.event.pull_request.title }}
+      PR_URL: ${{ github.event.pull_request.html_url }}
+    steps:
+      - name: Check out the merged main
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request_target' && 'main' || github.ref_name }}
+          # Tags are the version counter, so the history has to be complete.
+          fetch-depth: 0
+
+      - name: Record the commit being released
+        id: src
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Work out the next version
+        id: version
+        run: |
+          set -euo pipefail
+          NEXT="$(python3 build/version.py next)"
+          TAG="v$NEXT"
+          if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+            echo "::error::$TAG already exists; refusing to reuse a version number"
+            exit 1
+          fi
+          PREV="$(git describe --tags --abbrev=0 --match 'v[0-9]*.[0-9]*.[0-9]*' 2>/dev/null || true)"
+          {
+            echo "version=$NEXT"
+            echo "tag=$TAG"
+            echo "previous=$PREV"
+          } >> "$GITHUB_OUTPUT"
+          echo "this release: $TAG   previous: ${PREV:-none}"
+
+      - name: Stamp the version into the manifest
+        run: |
+          set -euo pipefail
+          python3 build/version.py stamp "${{ steps.version.outputs.version }}"
+          python3 build/version.py stamp "${{ steps.version.outputs.version }}" --check
+
+      # ~190 MB of pinned Sefaria JSON; keyed on the pin so it is fetched once
+      # per export revision. build/fetch_export.sh is idempotent, so a stale or
+      # half-populated cache is repaired rather than trusted.
+      - name: Cache the Sefaria export
+        uses: actions/cache@v4
+        with:
+          path: ref/Sefaria-Export-Archive
+          key: sefaria-export-${{ hashFiles('build/sefaria-export.pin', 'build/fetch_export.sh') }}
+
+      - name: Fetch the Sefaria export
+        run: ./build/fetch_export.sh "$EXPORT_ROOT"
+
+      - name: Build the pack (pipeline, icon, pack)
+        run: ./build/build_all.sh "$EXPORT_ROOT" --no-tests
+
+      - name: Validate the packed plugin
+        id: validator
+        run: |
+          set -uo pipefail
+          RESULT="not run"
+          if git clone --quiet --depth 1 \
+               https://github.com/Otzaria/otzaria-plugin-validator.git \
+               /tmp/otzaria-plugin-validator; then
+            if OUT="$(node /tmp/otzaria-plugin-validator/src/cli.js plugin --fail-on-warnings 2>&1)"; then
+              RESULT="0 errors, 0 warnings"
+            else
+              printf '%s\n' "$OUT"
+              echo "::error::the Otzaria plugin validator rejected the pack; not releasing it"
+              exit 1
+            fi
+            printf '%s\n' "$OUT" | tail -n 20
+          else
+            RESULT="unavailable"
+            echo "::warning::could not fetch the Otzaria plugin validator; skipped validation"
+          fi
+          echo "result=$RESULT" >> "$GITHUB_OUTPUT"
+
+      - name: Stage the release assets
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.version.outputs.tag }}"
+          mkdir -p dist/release
+          cp dist/otsaplugin.otzplugin "dist/release/otsaplugin-$TAG.otzplugin"
+          # The reports the pipeline just regenerated from the pinned export.
+          ( cd reports && zip -qr "../dist/release/otsaplugin-$TAG-reports.zip" . )
+          # The generated data pack, for diffing one release's data against another.
+          ( cd dist/pack && zip -qr "../../dist/release/otsaplugin-$TAG-datapack.zip" . )
+          ( cd dist/release && sha256sum -- * > SHA256SUMS.txt )
+          ls -l dist/release
+
+      - name: Write the release notes
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.version.outputs.tag }}"
+          if [ -n "$PR_NUMBER" ]; then
+            HEADLINE="Merged #$PR_NUMBER — $PR_TITLE"
+          else
+            HEADLINE="Released from $GITHUB_REF_NAME by @$GITHUB_ACTOR"
+          fi
+          GENERATED=/tmp/generated-notes.md
+          : > "$GENERATED"
+          if [ -n "${{ steps.version.outputs.previous }}" ]; then
+            gh api -X POST "repos/$GITHUB_REPOSITORY/releases/generate-notes" \
+              -f tag_name="$TAG" \
+              -f previous_tag_name="${{ steps.version.outputs.previous }}" \
+              --jq .body > "$GENERATED" \
+              || echo "::warning::could not generate a changelog since the previous tag"
+          fi
+          python3 build/release_notes.py \
+            --version "${{ steps.version.outputs.version }}" \
+            --tag "$TAG" \
+            --commit "${{ steps.src.outputs.sha }}" \
+            --headline "$HEADLINE" \
+            --plugin "dist/release/otsaplugin-$TAG.otzplugin" \
+            --plugin-name "otsaplugin-$TAG.otzplugin" \
+            --reports-asset "otsaplugin-$TAG-reports.zip" \
+            --datapack-asset "otsaplugin-$TAG-datapack.zip" \
+            --checksums-asset "SHA256SUMS.txt" \
+            --validator "${{ steps.validator.outputs.result }}" \
+            --append "$GENERATED" \
+            --out dist/RELEASE-NOTES.md
+          echo "--- release notes ---"
+          cat dist/RELEASE-NOTES.md
+
+      - name: Commit the version bump and tag the release
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.version.outputs.tag }}"
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # Only the manifest. The build also rewrites reports/, and those are
+          # attached to the release rather than committed.
+          git add plugin/manifest.json
+          if git diff --cached --quiet; then
+            echo "plugin/manifest.json already reads ${TAG#v}; nothing to commit"
+          else
+            git commit --quiet --message "Release $TAG"
+            if ! git push origin "HEAD:$GITHUB_REF_NAME"; then
+              echo "::error::could not push the version bump to $GITHUB_REF_NAME. If the branch is protected, give the Actions token bypass (or allow it in the rule) — without the bump commit there is nothing to tag."
+              exit 1
+            fi
+          fi
+          git tag --annotate "$TAG" --message "Release $TAG"
+          git push origin "$TAG"
+
+      - name: Publish the release
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.version.outputs.tag }}"
+          NAME="$(python3 -c 'import json;print(json.load(open("plugin/manifest.json"))["name"])')"
+          gh release create "$TAG" \
+            --title "$TAG — $NAME" \
+            --notes-file dist/RELEASE-NOTES.md \
+            dist/release/*
+
+      - name: Summary
+        if: always()
+        run: |
+          TAG="${{ steps.version.outputs.tag }}"
+          TAG="${TAG:-(no release)}"
+          {
+            echo "### $TAG"
+            if [ -n "${PR_URL:-}" ]; then
+              echo "Merged: $PR_URL"
+            fi
+            if [ "$TAG" != "(no release)" ]; then
+              echo "https://github.com/$GITHUB_REPOSITORY/releases/tag/$TAG"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,10 @@
+# Sefaria-Export-Archive revision the build is pinned to.
+#
+# One line, two fields: <commit> <commit-date>. Read by build/fetch_export.sh
+# (what to check out) and build/build_all.sh (what to record in reports/ when
+# the export checkout cannot report its own HEAD).
+#
+# Reproducing the shipped reports/ means keeping this commit. Moving it forward
+# is a deliberate act: the coverage, licence and merge-fidelity reports are all
+# regenerated from whatever is pinned here.
+3f1013631fdfe452e953a93a2c5f921319e394ed 2026-03-23

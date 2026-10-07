@@ -47,9 +47,14 @@ export archive.
 > to install). Open it as a codespace, fetch the Sefaria export into `ref/`, and
 > run `./build/build_all.sh`. Walkthrough: [docs/CODESPACES.md](docs/CODESPACES.md).
 
+`./build/build_all.sh` runs steps 1–4 in one go. Step by step:
+
 ```sh
+# 0. Fetch the pinned Sefaria export into ref/ (blobless + sparse, ~190 MB)
+build/fetch_export.sh
+
 # 1. Build the data pack (pinned Sefaria export commit) into plugin/data + dist/pack
-python3 build/pipeline.py --export-root /path/to/Sefaria-Export-Archive \
+python3 build/pipeline.py --export-root ref/Sefaria-Export-Archive \
   --out dist/pack --plugin-data plugin/data --reports reports \
   --stages tanakh,mishnah,talmud --talmud Berakhot,Shabbat \
   --policy open --commit 3f1013631fdfe452e953a93a2c5f921319e394ed --commit-date 2026-03-23
@@ -58,7 +63,7 @@ python3 build/pipeline.py --export-root /path/to/Sefaria-Export-Archive \
 python3 build/make_icon.py
 
 # 3. Run the test suite (123 golden tests; drives the real shipped JS + Python)
-node tests/run_tests.js --export-root /path/to/Sefaria-Export-Archive
+node tests/run_tests.js --export-root ref/Sefaria-Export-Archive
 
 # 4. Pack the distributable and validate it (zero warnings is required)
 python3 build/pack_plugin.py
@@ -68,6 +73,18 @@ node /path/to/otzaria-plugin-validator/src/cli.js plugin --fail-on-warnings
 Current results: 92 books · 29,500 segments · 10.3 MB JSON · `.otzplugin` 106 entries,
 3.3 MB · validator **0 errors, 0 warnings, design-compliant** · merge fidelity
 **100.00%**.
+
+## Releases
+
+Merging a pull request into `main` builds the pack and publishes a
+[GitHub release](https://github.com/mgsmath/otsaplugin/releases) with it.
+Versions start at `v0.0.1` and rise by `0.0.1` per release; the number is taken
+from the repository's own tags and stamped into `plugin/manifest.json`, and that
+one-line bump is committed back to `main`. Nothing is published unless the build
+and the Otzaria validator both pass, so a broken merge costs a failed job rather
+than a broken release. Assets: the `.otzplugin`, the reports and generated data
+pack from that build, and their checksums. **Actions → Release → Run workflow**
+cuts one by hand. Details: [docs/RELEASES.md](docs/RELEASES.md).
 
 ## Permissions (minimal, each justified)
 
@@ -97,12 +114,14 @@ No `network.*` and no background instance.
 ## Layout
 
 ```
-build/    pipeline, sanitiser, scope, icon + .otzplugin packers
+.github/  the release workflow (merged PR -> build -> v0.0.N release)
+build/    pipeline, sanitiser, scope, icon + .otzplugin packers, export fetch,
+          versioning, release notes
 plugin/   the shippable plugin (manifest, index.html, js/, css/, i18n/, icon/, data/)
 tests/    Node VM test harness + Python bridge (golden tests)
 reports/  coverage, licences, merge-fidelity, size
-docs/     MAPPING.md, LICENSING.md
+docs/     MAPPING.md, LICENSING.md, CODESPACES.md, RELEASES.md
 FEASIBILITY.md  Phase-0 findings
 ```
 
-`plugin/data/` and `dist/` are generated; keep them out of Git.
+`ref/`, `plugin/data/` and `dist/` are generated or fetched; keep them out of Git.

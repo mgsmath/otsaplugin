@@ -17,9 +17,23 @@ the integrated terminal.
 
 The pipeline reads a local checkout of
 [Sefaria-Export-Archive](https://github.com/Sefaria/Sefaria-Export-Archive)
-(~8 GB of full history) and never downloads anything itself. A blobless, sparse
-clone keeps it small — it pulls only the directories the default build reads
-(all of Tanakh and Mishnah, plus Bavli Berakhot and Shabbat):
+(~8 GB of full history) and never downloads anything itself. One script fetches
+the pinned commit, blobless and sparse, and retries the parts that depend on the
+network:
+
+```sh
+build/fetch_export.sh          # -> ref/Sefaria-Export-Archive, ~190 MB
+```
+
+It pulls only the work directories `build/scope.py` globs — Tanakh Torah,
+Prophets and Writings, the six Mishnah sedarim, and Bavli Berakhot and Shabbat —
+and ends by reporting how many buildable work directories landed. All of
+`json/Tanakh` and `json/Mishnah` would be ~1.5 GB; the ~1.35 GB difference is
+commentary (Rishonim, Acharonim, Targum, Modern) that `build/pipeline.py` never
+opens, so the pack is identical either way. It is idempotent, so it is safe to
+re-run — that is also what the release workflow does before every build.
+
+The equivalent by hand, if you want the wider scope:
 
 ```sh
 git clone --filter=blob:none --no-checkout \
@@ -32,9 +46,10 @@ git -C ref/Sefaria-Export-Archive sparse-checkout set \
 git -C ref/Sefaria-Export-Archive checkout 3f1013631fdfe452e953a93a2c5f921319e394ed
 ```
 
-The pinned commit is the one the shipped `reports/` were built from; checking
-it out reproduces the shipped pack exactly. Want a different scope? Add more
-directories to `sparse-checkout set` and pass more tractates to `--talmud`
+The pinned commit lives in `build/sefaria-export.pin` and is the one the shipped
+`reports/` were built from; checking it out reproduces the shipped pack exactly.
+Want a different scope? Add directories to `SPARSE_DIRS` in `build/fetch_export.sh`
+(or to `sparse-checkout set` above) and pass more tractates to `--talmud`
 (or drop `--talmud` for all of Bavli).
 
 `ref/` is gitignored — the export never lands in this repo's git history.
@@ -85,6 +100,10 @@ Zero errors and zero warnings is required before shipping.
 `dist/otsaplugin.otzplugin` is a plain ZIP. Right-click it in the Explorer →
 **Download**, then install it in Otzaria (Settings → Plugins → install from
 file). Any other way of moving a file out of the codespace works too.
+
+Or skip the codespace: merging a pull request into `main` builds the pack and
+publishes it as a [GitHub release](https://github.com/mgsmath/otsaplugin/releases)
+— see [RELEASES.md](RELEASES.md).
 
 ## Gotchas
 

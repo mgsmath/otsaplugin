@@ -25,7 +25,6 @@
     'העברית': 'Hebrew',
     'הערות': 'Notes',
     'הצג תרגום': 'Show translation',
-    'הצצה': 'Peek',
     'הקטע שנבחר לא זוהה בוודאות — מוצג הקטע כולו':
       'The selection could not be matched exactly, so the whole section is shown.',
     'השם אינו חד-משמעי': 'Multiple matches',

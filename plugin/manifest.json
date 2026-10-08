@@ -38,7 +38,7 @@
           "title": "Translate selected passage",
           "icon": "fluent:translate_24_regular",
           "openPlugin": true,
-          "param": "peek"
+          "param": "selection"
         },
         {
           "id": "english-translation-split",

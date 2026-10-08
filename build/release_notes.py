@@ -7,7 +7,7 @@ restated from the README, so the numbers on a release always describe that
 release.
 
     python3 build/release_notes.py --version 1.1.0 --tag v1.1.0 --commit <sha> \\
-        --headline "Merged #12 — Fix the peek window" \\
+        --headline "Merged #12 — Align the side-by-side view" \\
         --pack dist/pack/manifest.json --extended-pack dist/extended-pack/manifest.json \\
         --plugin dist/release/otsaplugin-v1.1.0.otzplugin \\
         --otzenpack dist/otsaplugin-extended.otzenpack \\

@@ -86,9 +86,12 @@ naming a pull request.
   status checks, give `github-actions[bot]` bypass, or the job fails at the push
   step with an error saying exactly that. Nothing is published in that case —
   fix the rule and re-run.
-- **Disk and patience.** The export checkout is ~2.3 GB and the build writes
-  another few hundred megabytes; a standard `ubuntu-latest` runner has room, but
-  the first run of a new pin pays the full fetch.
+- **Disk and patience.** The export checkout is 2.3 GB of files (9,942 of them,
+  ~2.5 GB on disk), and `actions/cache` stores the ~0.7 GB `.git` that lets the
+  audit verify it right alongside, so a warm runner holds ~3.2 GB of export
+  before the build adds a few hundred megabytes of its own. A standard
+  `ubuntu-latest` runner has room, but the first run of a new pin pays the full
+  fetch — a few minutes.
 - The workflow uses `pull_request_target`, which needs the file to be on `main`
   already. The pull request that adds it may not trigger a release of its own;
   use the manual button once if the first tag does not appear.
@@ -121,6 +124,7 @@ requests and manual runs.
 | Job fails with "v1.1.N already exists" | A previous run got as far as tagging. Delete the tag (`git push origin :refs/tags/v1.1.N`) and the release if it was created, then re-run — the job will not reuse a version number. |
 | *Validate the packed plugin* fails | Read the error: it names the store rule that was broken (a `name` over 14 characters, a `name` that differs from `contributes.toolTab.title`, a permission the manifest does not justify). Fix the manifest and merge; nothing was published. |
 | *Fetch the Sefaria export* fails after its retries | GitHub could not serve the pinned blobs. Re-run — the audit means only what is missing gets fetched. The script fetches one root at a time with a transfer-rate floor for exactly this reason. |
+| *Fetch the Sefaria export* fails with "*N* file(s) the pipeline reads are missing" | The audit compared the pinned tree with the disk and found a hole — an interrupted blob fetch, or a cache restored half-written. Re-run; it fetches only what is missing. It reads `git ls-files -z`, because git C-quotes any path holding a non-ASCII byte and 301 of the export's translations are named in German, Catalan, Romanian or Hebrew: handed a quoted path, `os.path.exists()` says no, and a complete checkout looks incomplete. `tests/run_tests.js` guards that. |
 | *Validate* warns "could not fetch the validator" | The validator repo was unreachable, so validation was skipped and the release still went out. Re-validate locally with `node …/cli.js plugin --fail-on-warnings`. |
 | Release has no `.otzenpack` | It came out over GitHub's 2 GB asset cap; the log and the release body both say so. Build it locally with `./build/build_all.sh`. |
 | No release after merging | The workflow only runs from `main`. If the merged pull request was the one that added it, press **Run workflow** once. Also confirm the job was not skipped: it ignores pull requests closed without merging. |

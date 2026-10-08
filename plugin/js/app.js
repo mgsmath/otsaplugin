@@ -11,7 +11,7 @@
   var App = (NS.App = {});
 
   // Context-menu item ids declared in manifest.json.
-  var MENU_PEEK_ID = 'english-translation';
+  var MENU_TRANSLATE_ID = 'english-translation';
   var MENU_SPLIT_ID = 'english-translation-split';
 
   var state = {
@@ -20,7 +20,7 @@
     book: null,
     chunk: null,
     view: null,
-    entry: 'reader', // 'peek' | 'reader'
+    entry: 'reader', // 'selection' | 'reader'
     lastRef: null,
     lastBookId: null,
     lastTitle: null,
@@ -61,25 +61,28 @@
     });
 
     // The two declarative context-menu actions are delivered after boot without
-    // needing a background instance. The second opens the built-in split view.
+    // needing a background instance. Both translate the selected passage in the
+    // panel — the whole section, scrolled to that passage, never a window
+    // around it; the second one always shows both languages at once.
     window.Otzaria.on('reader.context_menu_item_clicked', function (payload) {
       payload = payload || {};
-      var param = payload.param;
       var itemId = payload.itemId;
-      var view = param === 'split' || itemId === MENU_SPLIT_ID ? 'sidebyside' : 'peek';
-      if (itemId && itemId !== MENU_PEEK_ID && itemId !== MENU_SPLIT_ID) return;
-      state.entry = 'peek';
-      state.view = view;
+      if (itemId && itemId !== MENU_TRANSLATE_ID && itemId !== MENU_SPLIT_ID) return;
+      var split = payload.param === 'split' || itemId === MENU_SPLIT_ID;
+      state.entry = 'selection';
+      // The split action pins the view; the plain one opens in whatever this
+      // entry point last used.
+      state.view = split ? 'sidebyside' : null;
       var req = readerLocation(payload);
       req.selection = payload.selectedText || payload.selection || '';
-      req.entry = 'peek';
+      req.entry = 'selection';
       App.show(req);
     });
 
     window.Otzaria.on('plugin.page_opened', function (payload) {
       payload = payload || {};
       var param = payload.param || {};
-      if (param.entry === 'peek' || param.entry === 'reader') state.entry = param.entry;
+      if (param.entry === 'selection' || param.entry === 'reader') state.entry = param.entry;
       if (param.view && NS.Views[param.view]) state.view = param.view;
     });
 
@@ -283,8 +286,9 @@
       if (focus === null && req.selection) {
         var located = Ref.locateSegment(unit, req.selection);
         if (located && located.index >= 0) focus = located.index;
-        else if (state.entry === 'peek') {
-          // If the selection cannot be mapped safely, show the whole unit.
+        else if (state.entry === 'selection') {
+          // If the selection cannot be mapped safely, the whole unit is shown
+          // and nothing is highlighted rather than the wrong passage marked.
           NS.flashNotice(NS.t('הקטע שנבחר לא זוהה בוודאות — מוצג הקטע כולו'));
         }
       }
@@ -339,23 +343,13 @@
 
   function draw(book, unit, parsed, focus, hebrew, req) {
     var view = App.currentView();
+    // Every view renders the whole unit — the chapter or daf the reader is on —
+    // and the passage the reader came from is scrolled to and outlined. A view
+    // showing only a few passages around the selection lost the reader the
+    // thread of the chapter, so there is no windowed view any more.
     var n = unit.e.length;
     var from = 0;
     var to = n;
-    if (view === 'peek') {
-      var ctx = NS.settings.revealContext || 2;
-      var centre = focus === null ? 0 : focus;
-      from = Math.max(0, centre - ctx);
-      to = Math.min(n, centre + ctx + 1);
-      if (focus === null && req.selection) {
-        // No segment identified: showing ±2 around an unknown centre would be a
-        // guess. Fall back to the whole unit.
-        from = 0;
-        to = n;
-      }
-    } else if (focus !== null && NS.settings.scrollToFocus !== false) {
-      // Whole unit, but scrolled to the verse the reader is on.
-    }
 
     var segmentGroups = unit.g ? NS.expandRuns(unit.g, n, -1) : null;
     var ctxObj = {
@@ -415,7 +409,7 @@
     if (state.view && NS.Views[state.view]) return state.view;
     var perEntry = (NS.settings.viewForContext || {})[state.entry];
     if (perEntry && NS.Views[perEntry]) return perEntry;
-    return state.entry === 'peek' ? 'peek' : 'sidebyside';
+    return 'sidebyside';
   };
 
   App.setView = function (view) {
@@ -506,12 +500,6 @@
       NS.saveSettings();
       App.setView(App.currentView());
     });
-    on('opt-context', 'change', function (ev) {
-      var parsed = parseInt(ev.target.value, 10);
-      NS.settings.revealContext = Math.max(0, Math.min(10, isNaN(parsed) ? 2 : parsed));
-      NS.saveSettings();
-      App.setView(App.currentView());
-    });
     on('opt-import', 'click', function () {
       NS.Data.pickAndUsePack()
         .then(function (m) {
@@ -563,7 +551,6 @@
     }
     setChecked('opt-numbers', NS.settings.numbers);
     setValue('opt-order', NS.settings.order);
-    setValue('opt-context', String(NS.settings.revealContext));
     var root = document.documentElement;
     root.classList.toggle('density-compact', NS.settings.density === 'compact');
     root.classList.toggle('order-en', NS.settings.order === 'english-first');

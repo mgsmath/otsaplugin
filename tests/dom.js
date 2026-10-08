@@ -7,6 +7,14 @@
  */
 'use strict';
 
+/** data-index ←→ index, in both directions, as the DOM reflects it. */
+function dataAttribute(key) {
+  return 'data-' + String(key).replace(/[A-Z]/g, (c) => '-' + c.toLowerCase());
+}
+function datasetKey(attribute) {
+  return attribute.slice(5).replace(/-([a-z])/g, (_, c) => c.toUpperCase());
+}
+
 class ClassList {
   constructor(el) {
     this.el = el;
@@ -38,7 +46,29 @@ class Node {
     this.childNodes = [];
     this.parentNode = null;
     this.attributes = {};
-    this.dataset = {};
+    // A real element's dataset *is* its data-* attributes in both directions:
+    // `el.dataset.index = 3` makes `[data-index="3"]` match, which is how the
+    // plugin scrolls to a passage. A plain object here would hide that.
+    this.dataset = new Proxy(
+      {},
+      {
+        get: (_, key) => (typeof key === 'string' ? this.attributes[dataAttribute(key)] : undefined),
+        set: (_, key, value) => {
+          if (typeof key === 'string') this.attributes[dataAttribute(key)] = String(value);
+          return true;
+        },
+        has: (_, key) => typeof key === 'string' && dataAttribute(key) in this.attributes,
+        deleteProperty: (_, key) => {
+          if (typeof key === 'string') delete this.attributes[dataAttribute(key)];
+          return true;
+        },
+        ownKeys: () =>
+          Object.keys(this.attributes)
+            .filter((k) => k.startsWith('data-'))
+            .map(datasetKey),
+        getOwnPropertyDescriptor: () => ({ enumerable: true, configurable: true }),
+      }
+    );
     this.listeners = {};
     this.style = { setProperty() {}, removeProperty() {} };
     this._classList = new ClassList(this);
@@ -224,14 +254,13 @@ function makeFixture() {
     'pack-info',
     'opt-numbers',
     'opt-order',
-    'opt-context',
     'opt-import',
     'opt-bundled',
   ];
   ids.forEach((id) => {
-    const tag = id.startsWith('opt-') && (id === 'opt-order' || id === 'opt-context')
+    const tag = id === 'opt-order'
       ? 'select'
-      : id.startsWith('opt-') && id === 'opt-numbers'
+      : id === 'opt-numbers'
         ? 'input'
         : 'div';
     const node = document.register(id, new Node(tag));

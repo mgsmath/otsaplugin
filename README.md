@@ -6,17 +6,20 @@ regardless of Otzaria's language setting; Hebrew source text remains right-to-le
 
 ## Reader features
 
-- Six reading layouts: English only, side by side, interleaved, flowing, Peek,
-  and Tap to reveal.
+- Five reading layouts: English only, **side by side**, interleaved, flowing,
+  and Tap to reveal. Side by side pairs passage with passage: verse 10's English
+  is a row with verse 10's Hebrew, all the way down the chapter or daf.
 - A **Translate** button refreshes the current reader location; **Split view**
   immediately opens the Hebrew/English side-by-side layout.
 - Two reader context-menu actions: **Translate selected passage** and
-  **Translate side by side**. Both can be used directly from a selected passage.
+  **Translate side by side**. Both show the passage in its whole chapter or daf,
+  scrolled to and outlined, rather than a cut-down window of nearby passages.
 - **Follow reader** refreshes the translation as the current reference changes.
   **Open in reader** uses the reader's actual book id and reference.
 - Hebrew alignment failures are handled quietly. The plugin never re-splits an
-  uncertain Hebrew match; it uses packed Hebrew where available and does not
-  show the letter-sequence-mismatch warning.
+  uncertain Hebrew match: it uses packed Hebrew where available, pairs verses
+  only when Otzaria's text matches the pack letter for letter, and otherwise
+  shows the section in one row instead of pairing the wrong verses.
 - Works offline after the translation data is installed. The plugin requests no
   network permission.
 
@@ -92,8 +95,9 @@ workflow** cuts one by hand. Details: [docs/RELEASES.md](docs/RELEASES.md).
 
 ## Split-pane note
 
-The plugin's **Split view** button divides the translation panel into Hebrew and
-English columns. Otzaria's separate `CombinedTab` split-pane layout is controlled
+The plugin's **Split view** button lays the translation panel out one row per
+passage, Hebrew on one side and English on the other. Otzaria's separate
+`CombinedTab` split-pane layout is controlled
 by the host app's tab menu; the plugin SDK currently does not expose a method to
 create that host-level split automatically. The Settings panel gives the exact
 host-menu action.

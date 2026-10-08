@@ -152,13 +152,12 @@
 
   NS.DEFAULTS = {
     view: null, // last used view; null = per-entry-point default
-    viewForContext: null, // { peek: 'peek', follow: 'sidebyside' }
+    viewForContext: null, // { selection: 'sidebyside', reader: 'interleaved' }
     follow: false,
     order: 'hebrew-first', // 'hebrew-first' | 'english-first'
     numbers: true,
     density: 'comfortable', // 'compact' | 'comfortable'
     fontScale: 1,
-    revealContext: 2, // +/- segments around a selection in Peek
     dataSource: 'bundled', // 'bundled' | 'imported'
     importToken: null,
   };

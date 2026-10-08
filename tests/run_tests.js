@@ -201,7 +201,7 @@ function withClass(nodes, cls) {
   return nodes.filter((n) => n.classList.contains(cls));
 }
 
-/** The active view-style button (the split toggle is also a view-tab, but has no view). */
+/** The active view-style button. */
 function activeViews(doc) {
   return withClass(doc.getElementById('view-tabs').querySelectorAll('.view-tab'), 'active').filter((n) => n.dataset.view);
 }
@@ -626,7 +626,7 @@ async function main() {
 
   // ---- Views --------------------------------------------------------------
   group('The five views render loaded pack data');
-  // Split view is the default for new pages; these tests cover the plain views.
+  // New pages open beside the reader only when that setting is on; these tests cover the plain views.
   const viewEnv = loadPlugin({
     'reader.getCurrentRef': () => ({ bookId: 'בראשית', ref: 'פרק א, פסוק ג', index: 0 }),
     'reader.getSectionTextMap': () => ({ __error: true, code: 'error.unsupported' }),
@@ -783,6 +783,8 @@ async function main() {
     const e = loadPlugin({
       'reader.getCurrentRef': () => null,
       'reader.getSectionTextMap': () => ({ __error: true, code: 'error.unsupported' }),
+      'reader.getCurrentState': () => null,
+      'reader.openBook': () => true,
       'library.getTree': () => null,
       'storage.get': () => null,
     }, { fixture: true });
@@ -793,11 +795,12 @@ async function main() {
       currentRef: 'פרק א, פסוק ד',
       currentBook: 'בראשית',
       currentBookId: 'בראשית',
+      currentIndex: 3,
     });
     await new Promise((r) => setTimeout(r, 80));
     const host = e.fixture.document.getElementById('render-host');
-    eq(host.querySelectorAll('.split-wrap').length, 1, 'a new page opens in split view by default');
-    const english = host.querySelector('.split-en').querySelectorAll('.seg');
+    eq(e.calls.filter((c) => c.method === 'reader.openBook').length, 1, 'a new page opens its reader beside it by default');
+    const english = host.querySelectorAll('.seg');
     eq(english.length, 4, 'the whole chapter, not a few passages around the selection');
     const marked = host.querySelectorAll('.focused');
     assert(marked.length > 0, 'the selected passage is marked');
@@ -879,7 +882,7 @@ async function main() {
     assert(!/src\s*=\s*["']https?:/i.test(html), 'no remote script in index.html');
     assert(!/href\s*=\s*["']https?:/i.test(html), 'no remote stylesheet in index.html');
   });
-  await test('the top bar has Reader and Follow reader; Translate and Split view are not there', async () => {
+  await test('the top bar has Reader and Follow reader; the view bar has no split toggle', async () => {
     const e = loadPlugin({
       'reader.getCurrentRef': () => ({ bookId: 'בראשית', ref: 'פרק א, פסוק ג', index: 0 }),
       'reader.getSectionTextMap': () => ({ __error: true, code: 'error.unsupported' }),
@@ -890,6 +893,7 @@ async function main() {
     await new Promise((r) => setTimeout(r, 60));
     const doc = e.fixture.document;
     assert(!doc.getElementById('btn-translate'), 'no Translate button');
+    assert(!doc.getElementById('btn-split'), 'no split toggle in the view bar');
     const html = fs.readFileSync(path.join(PLUGIN, 'index.html'), 'utf8');
     const bar = html.slice(html.indexOf('id="topbar-actions"'), html.indexOf('</header>'));
     const top = [...bar.matchAll(/<button[^>]*id="([^"]+)"/g)].map((m) => m[1]);
@@ -902,66 +906,324 @@ async function main() {
     eq(opened.payload.ref, 'פרק א, פסוק ג');
     eq(opened.payload.bookId, 'בראשית');
   });
-  await test('split view is a view-bar toggle: reader on the left, English on the right, English only by default', async () => {
-    const e = loadPlugin({
-      'reader.getCurrentRef': () => ({ bookId: 'בראשית', ref: 'פרק א, פסוק ג', index: 0 }),
-      'reader.getSectionTextMap': () => ({ __error: true, code: 'error.unsupported' }),
-      'storage.get': () => null,
-    });
-    await boot(e);
-    await new Promise((r) => setTimeout(r, 60));
-    const doc = e.fixture.document;
-    const host = doc.getElementById('render-host');
-    eq(host.querySelectorAll('.split-wrap').length, 1, 'split by default');
-    const he = host.querySelector('.split-he');
-    const en = host.querySelector('.split-en');
-    assert(he.textContent.indexOf('בראשית ברא') >= 0, 'Hebrew on the left: ' + he.textContent.slice(0, 40));
-    assert(en.textContent.indexOf('In the beginning') >= 0, 'English on the right');
-    assert(he.textContent.indexOf('In the beginning') < 0, 'no English in the Hebrew pane');
-    eq(doc.getElementById('btn-split').classList.contains('active'), true, 'split toggle is on');
-    const active = activeViews(doc);
-    eq(active.length, 1);
-    eq(active[0].dataset.view, 'english', 'the view defaults to English only in split view');
-    eq(host.querySelectorAll('.sbs-grid').length, 0, 'the side-by-side view is not also on');
+  // ---- Split view: Otzaria's own split, with the reader beside the page ----
+  group('Split view: Otzaria’s built-in split, reader on the left, English on the right');
 
-    doc.getElementById('btn-split').dispatch('click');
-    await new Promise((r) => setTimeout(r, 60));
-    eq(host.querySelectorAll('.split-wrap').length, 0, 'the toggle turns split off');
-    eq(activeViews(doc)[0].dataset.view, 'sidebyside', 'back to the ordinary view');
-    doc.getElementById('btn-split').dispatch('click');
-    await new Promise((r) => setTimeout(r, 60));
-    eq(host.querySelectorAll('.split-wrap').length, 1, 'and on again');
-    eq(activeViews(doc)[0].dataset.view, 'english');
+  /** The reader's state while its own tab is listed beside the plugin tab. */
+  const readerTabState = (book, bookUid, index) => ({
+    currentBook: book,
+    currentBookId: book,
+    bookUid,
+    currentIndex: index,
+    currentRef: null,
+    openTabs: [
+      { isSelf: false, toolId: null, book, bookId: book, bookUid, index },
+      { isSelf: true, toolId: 'org.sefaria.otzaria-english', book: 'English', bookId: 'English', bookUid: null, index: 0 },
+    ],
   });
-  await test('with the Settings option off, a new page opens side by side, not split', async () => {
-    const e = loadPlugin({
-      'reader.getCurrentRef': () => ({ bookId: 'בראשית', ref: 'פרק א, פסוק ג', index: 0 }),
-      'reader.getSectionTextMap': () => ({ __error: true, code: 'error.unsupported' }),
-      'storage.get': () => ({ splitNewPages: false }),
-    });
+
+  /** The reader's state inside a split: the plugin tab is listed, its reader pane is not. */
+  const besideState = (book, bookUid, index) => ({
+    currentBook: book,
+    currentBookId: book,
+    bookUid,
+    currentIndex: index,
+    currentRef: null,
+    openTabs: [
+      { isSelf: true, toolId: 'org.sefaria.otzaria-english', book: 'English', bookId: 'English', bookUid: null, index: 0 },
+    ],
+  });
+
+  /** A passage sent from the reader's context menu, as the host reports it. */
+  const passageClick = {
+    itemId: 'english-translation',
+    selectedText: 'וירא אלהים את האור',
+    currentRef: 'פרק א, פסוק ד',
+    currentBook: 'בראשית',
+    currentBookId: 'בראשית',
+    currentIndex: 3,
+    selection: { bookUid: 'uid-genesis', bookTitle: 'בראשית' },
+  };
+
+  /** Host handlers with the reader on Genesis, plus whatever a test adds. */
+  const readerEnv = (handlers) =>
+    Object.assign(
+      {
+        'reader.getCurrentRef': () => null,
+        'reader.getSectionTextMap': () => ({ __error: true, code: 'error.unsupported' }),
+        'library.getTree': () => null,
+        'storage.get': () => null,
+      },
+      handlers
+    );
+
+  const callsTo = (e, method) => e.calls.filter((c) => c.method === method);
+
+  await test('a passage sent from the reader opens beside it, with the reader on the left', async () => {
+    const e = loadPlugin(
+      readerEnv({
+        'reader.getCurrentState': () => readerTabState('בראשית', 'uid-genesis', 3),
+        'reader.openBook': () => true,
+      }),
+      { fixture: true }
+    );
+    await boot(e);
+    e.emit('reader.context_menu_item_clicked', passageClick);
+    await new Promise((r) => setTimeout(r, 80));
+    const doc = e.fixture.document;
+    const opened = callsTo(e, 'reader.openBook');
+    eq(opened.length, 1, 'Otzaria opens the text once');
+    const args = opened[0].payload;
+    eq(args.openInSidePane, true, 'as a pane beside the page, not a new tab');
+    eq(args.bookUid, 'uid-genesis', 'found by its uid');
+    eq(args.index, 3, 'at the passage the reader had selected');
+    eq(args.navigateToPositionIfReused, true, 'and moved to that place if it is already open');
+    eq(args.bookId, undefined, 'no title sent along with the uid');
+    eq(activeViews(doc)[0].dataset.view, 'english', 'the page shows English only: the reader has the Hebrew');
+    const host = doc.getElementById('render-host');
+    eq(host.querySelectorAll('.seg').length, 4, 'the whole chapter, not a few passages around the selection');
+    assert(host.textContent.indexOf('In the beginning') >= 0, 'the English is on the page');
+    const marked = host.querySelectorAll('.focused');
+    assert(marked.length > 0, 'the selected passage is marked');
+    assert(marked.every((node) => node.dataset.index === '3'), 'and it is the passage the reader had selected');
+    eq(doc.getElementById('notice').textContent, '', 'no notice when the split opens');
+  });
+
+  await test('+ New page opens the reader beside the new page, at the reader’s place', async () => {
+    const e = loadPlugin(
+      readerEnv({
+        'reader.getCurrentRef': () => ({ bookId: 'בראשית', ref: 'פרק א, פסוק ג', index: 0 }),
+        'reader.getCurrentState': () => readerTabState('בראשית', 'uid-genesis', 0),
+        'reader.openBook': () => true,
+      }),
+      { fixture: true }
+    );
+    await boot(e);
+    await new Promise((r) => setTimeout(r, 40));
+    e.fixture.document.getElementById('page-tabs').querySelector('.page-tab-new').dispatch('click');
+    await new Promise((r) => setTimeout(r, 80));
+    const opened = callsTo(e, 'reader.openBook');
+    eq(opened.length, 1, 'one reader opened beside the new page');
+    eq(opened[0].payload.bookId, 'בראשית', 'found by title when the reader gave no uid');
+    eq(opened[0].payload.bookUid, undefined, 'no uid sent');
+    eq(opened[0].payload.index, 0, 'at the reader’s line');
+    assert(
+      e.calls.indexOf(callsTo(e, 'reader.getCurrentState')[0]) < e.calls.indexOf(opened[0]),
+      'the reader state is read before the split is requested'
+    );
+    eq(activeViews(e.fixture.document)[0].dataset.view, 'english', 'the new page is English only');
+  });
+
+  await test('the page that opens with the plugin is never split', async () => {
+    const e = loadPlugin(
+      readerEnv({
+        'reader.getCurrentRef': () => ({ bookId: 'בראשית', ref: 'פרק א, פסוק ג', index: 0 }),
+        'reader.getCurrentState': () => readerTabState('בראשית', 'uid-genesis', 0),
+        'reader.openBook': () => true,
+      })
+    );
+    await boot(e);
+    await new Promise((r) => setTimeout(r, 60));
+    eq(callsTo(e, 'reader.openBook').length, 0, 'no reader is opened beside it');
+    eq(callsTo(e, 'reader.getCurrentState').length, 0, 'the reader is not even asked for its layout');
+    eq(activeViews(e.fixture.document)[0].dataset.view, 'sidebyside', 'it keeps its ordinary view');
+  });
+
+  await test('Follow reader never opens a split', async () => {
+    const e = loadPlugin(
+      readerEnv({
+        'reader.getCurrentRef': () => ({ bookId: 'בראשית', ref: 'פרק א, פסוק ג', index: 0 }),
+        'reader.getCurrentState': () => readerTabState('בראשית', 'uid-genesis', 0),
+        'reader.openBook': () => true,
+      })
+    );
+    await boot(e);
+    await new Promise((r) => setTimeout(r, 60));
+    e.NS.settings.follow = true;
+    e.emit('reader.current_ref_changed', { bookId: 'שמות', ref: 'פרק ב', bookTitle: 'שמות' });
+    await new Promise((r) => setTimeout(r, 80));
+    eq(callsTo(e, 'reader.openBook').length, 0, 'no reader is opened beside the followed page');
+  });
+
+  await test('with the Settings option off, a new page does not split and keeps its ordinary view', async () => {
+    const e = loadPlugin(
+      readerEnv({
+        'reader.getCurrentRef': () => ({ bookId: 'בראשית', ref: 'פרק א, פסוק ג', index: 0 }),
+        'reader.getCurrentState': () => readerTabState('בראשית', 'uid-genesis', 0),
+        'reader.openBook': () => true,
+        'storage.get': () => ({ splitNewPages: false }),
+      })
+    );
     await boot(e);
     await new Promise((r) => setTimeout(r, 60));
     const doc = e.fixture.document;
-    eq(doc.getElementById('render-host').querySelectorAll('.split-wrap').length, 0, 'not split');
-    eq(doc.getElementById('render-host').querySelectorAll('.sbs-grid').length, 1, 'side by side');
+    doc.getElementById('page-tabs').querySelector('.page-tab-new').dispatch('click');
+    await new Promise((r) => setTimeout(r, 80));
+    eq(callsTo(e, 'reader.openBook').length, 0, 'no reader is opened');
+    eq(callsTo(e, 'reader.getCurrentState').length, 0, 'the layout is not even read');
+    eq(activeViews(doc)[0].dataset.view, 'sidebyside', 'side by side, as before');
     eq(doc.getElementById('opt-split-default').checked, false, 'the Settings checkbox reflects it');
+    e.NS.App.setView('flowing');
+    eq(e.NS.settings.viewForContext.reader, 'flowing', 'a view chosen on an ordinary page is remembered');
   });
-  await test('every view also renders inside split view', async () => {
-    const e = loadPlugin({
-      'reader.getCurrentRef': () => ({ bookId: 'בראשית', ref: 'פרק א, פסוק ג', index: 0 }),
-      'reader.getSectionTextMap': () => ({ __error: true, code: 'error.unsupported' }),
-      'storage.get': () => null,
-    });
+
+  await test('a reader already beside the plugin on the same text is moved to the line, not opened again', async () => {
+    const e = loadPlugin(
+      readerEnv({
+        'reader.getCurrentState': () => besideState('בראשית', 'uid-genesis', 5),
+        'reader.openBook': () => true,
+        'reader.scrollToSection': () => true,
+      }),
+      { fixture: true }
+    );
     await boot(e);
-    await new Promise((r) => setTimeout(r, 60));
+    e.emit('reader.context_menu_item_clicked', passageClick);
+    await new Promise((r) => setTimeout(r, 80));
+    const scrolls = callsTo(e, 'reader.scrollToSection');
+    eq(scrolls.length, 1, 'the reader pane is scrolled once');
+    eq(scrolls[0].payload.sectionIndex, 3, 'to the selected passage');
+    eq(callsTo(e, 'reader.openBook').length, 0, 'and no second copy of the text is opened');
+    eq(activeViews(e.fixture.document)[0].dataset.view, 'english', 'the page stays beside the reader');
+    eq(e.fixture.document.getElementById('notice').textContent, '', 'no notice');
+  });
+
+  await test('a split and a separate tab on the same text are told apart by their line', async () => {
+    // The reader beside the plugin is at line 5; a separate tab on the same text is
+    // at line 1. Only the separate tab is listed, so the split must still be found.
+    const e = loadPlugin(
+      readerEnv({
+        'reader.getCurrentState': () => ({
+          currentBook: 'בראשית',
+          currentBookId: 'בראשית',
+          bookUid: 'uid-genesis',
+          currentIndex: 5,
+          currentRef: null,
+          openTabs: [
+            { isSelf: false, toolId: null, book: 'בראשית', bookId: 'בראשית', bookUid: 'uid-genesis', index: 1 },
+            { isSelf: true, toolId: 'org.sefaria.otzaria-english', book: 'English', bookId: 'English', bookUid: null, index: 0 },
+          ],
+        }),
+        'reader.openBook': () => true,
+        'reader.scrollToSection': () => true,
+      }),
+      { fixture: true }
+    );
+    await boot(e);
+    e.emit('reader.context_menu_item_clicked', passageClick);
+    await new Promise((r) => setTimeout(r, 80));
+    eq(callsTo(e, 'reader.openBook').length, 0, 'the split already holds this text: no second copy');
+    const scrolls = callsTo(e, 'reader.scrollToSection');
+    eq(scrolls.length, 1, 'the reader beside the plugin is moved to the passage');
+    eq(scrolls[0].payload.sectionIndex, 3, 'to the selected passage');
+  });
+
+  await test('a reader beside the plugin on another text is left alone, and the page says so', async () => {
+    const e = loadPlugin(
+      readerEnv({
+        'reader.getCurrentState': () => besideState('שמות', 'uid-exodus', 1),
+        'reader.openBook': () => true,
+        'reader.scrollToSection': () => true,
+      }),
+      { fixture: true }
+    );
+    await boot(e);
+    e.emit('reader.context_menu_item_clicked', passageClick);
+    await new Promise((r) => setTimeout(r, 80));
+    const doc = e.fixture.document;
+    eq(callsTo(e, 'reader.openBook').length, 0, 'no reader is opened');
+    eq(callsTo(e, 'reader.scrollToSection').length, 0, 'and the other text is not scrolled');
+    eq(activeViews(doc)[0].dataset.view, 'sidebyside', 'the page falls back to its ordinary view');
+    const notice = doc.getElementById('notice').textContent;
+    assert(notice.indexOf('another text') >= 0, 'the notice says why: ' + notice);
+    e.NS.App.setView('flowing');
+    eq(e.NS.settings.viewForContext.selection, 'flowing', 'the page is an ordinary page again, so its view is remembered');
+  });
+
+  await test('a split that Otzaria refuses falls back to the ordinary view, with a warning', async () => {
+    const e = loadPlugin(
+      readerEnv({
+        'reader.getCurrentState': () => readerTabState('בראשית', 'uid-genesis', 3),
+        'reader.openBook': () => false,
+      }),
+      { fixture: true }
+    );
+    await boot(e);
+    e.emit('reader.context_menu_item_clicked', passageClick);
+    await new Promise((r) => setTimeout(r, 80));
+    const doc = e.fixture.document;
+    eq(callsTo(e, 'reader.openBook').length, 1, 'the split was tried');
+    eq(activeViews(doc)[0].dataset.view, 'sidebyside', 'the page shows its ordinary view');
+    const notice = doc.getElementById('notice').textContent;
+    assert(notice.indexOf('could not be opened beside') >= 0, 'the notice says so: ' + notice);
+  });
+
+  await test('a view picked beside the reader is not remembered for later pages', async () => {
+    const e = loadPlugin(
+      readerEnv({
+        'reader.getCurrentState': () => readerTabState('בראשית', 'uid-genesis', 3),
+        'reader.openBook': () => true,
+      }),
+      { fixture: true }
+    );
+    await boot(e);
+    e.emit('reader.context_menu_item_clicked', passageClick);
+    await new Promise((r) => setTimeout(r, 80));
+    e.NS.App.setView('flowing');
+    await new Promise((r) => setTimeout(r, 40));
+    eq(activeViews(e.fixture.document)[0].dataset.view, 'flowing', 'the page changes view');
+    eq((e.NS.settings.viewForContext || {}).selection, undefined, 'but the choice is not remembered');
+  });
+
+  await test('every view renders for a page beside the reader', async () => {
+    const e = loadPlugin(
+      readerEnv({
+        'reader.getCurrentState': () => readerTabState('בראשית', 'uid-genesis', 3),
+        'reader.openBook': () => true,
+      }),
+      { fixture: true }
+    );
+    await boot(e);
+    e.emit('reader.context_menu_item_clicked', passageClick);
+    await new Promise((r) => setTimeout(r, 80));
     for (const view of e.NS.Views.LIST) {
       e.NS.App.setView(view);
       await new Promise((r) => setTimeout(r, 40));
       const host = e.fixture.document.getElementById('render-host');
-      const pane = host.querySelector('.split-en');
-      assert(pane && pane.textContent.length > 20, view + ' fills the English pane');
-      assert(host.querySelector('.split-he').textContent.indexOf('בראשית') >= 0 || host.querySelector('.split-he').textContent.indexOf('ברא') >= 0, view + ' keeps the Hebrew');
+      assert(host.textContent.length > 20, view + ' fills the page: ' + host.textContent.slice(0, 40));
     }
+  });
+
+  await test('without the SDK, the split is not attempted', async () => {
+    const e = loadPlugin(false);
+    const outcome = await e.NS.App.openBesideReader({ bookUid: 'uid-genesis', title: 'בראשית', lineIndex: 0 });
+    eq(outcome, 'failed', 'a plain failure, not an error');
+  });
+
+  await test('the plugin’s own split is gone: no renderer, toggle, separator or styles', async () => {
+    const e = loadPlugin({});
+    await boot(e);
+    eq(e.NS.Views.split, undefined, 'no custom split renderer');
+    eq(e.NS.Views.hebrewPane, undefined, 'no Hebrew column renderer');
+    eq(e.NS.Views.LIST.length, 5, 'the five translation layouts remain');
+    eq(e.fixture.document.getElementById('btn-split'), null, 'no Split toggle in the view bar');
+    eq(e.fixture.document.getElementById('view-tabs').querySelectorAll('.view-tab').length, 5, 'only the five layouts in the view bar');
+    const html = fs.readFileSync(path.join(PLUGIN, 'index.html'), 'utf8');
+    assert(!/btn-split|split-toggle|tab-sep/.test(html), 'no split toggle in the markup');
+    const css = fs.readFileSync(path.join(PLUGIN, 'css', 'plugin.css'), 'utf8');
+    assert(!/split|tab-sep/.test(css), 'no split or separator styles');
+    const en = fs.readFileSync(path.join(PLUGIN, 'i18n', 'en.js'), 'utf8');
+    assert(en.indexOf('פיצול') < 0 && en.indexOf('הקורא משמאל') < 0, 'no strings for the removed toggle');
+    const app = fs.readFileSync(path.join(PLUGIN, 'js', 'app.js'), 'utf8');
+    assert(!/toggleSplit|btn-split|page\.split\b|Views\.split|hebrewPane/.test(app), 'no custom split in the app');
+  });
+
+  await test('the manifest asks for Otzaria 0.9.97 or later, which the split and reader.scrollToSection need', () => {
+    const mf = JSON.parse(fs.readFileSync(path.join(PLUGIN, 'manifest.json'), 'utf8'));
+    const got = String(mf.minAppVersion).split('.').map(Number);
+    const want = [0, 9, 97];
+    let order = 0;
+    for (let i = 0; i < want.length && order === 0; i++) order = Math.sign((got[i] || 0) - want[i]);
+    assert(order >= 0, 'minAppVersion ' + mf.minAppVersion + ' is older than 0.9.97');
   });
 
   await test('several English pages stay open, each with its own text', async () => {
@@ -970,7 +1232,7 @@ async function main() {
       'reader.getCurrentRef': () => current,
       'reader.getSectionTextMap': () => ({ __error: true, code: 'error.unsupported' }),
       'library.getTree': () => null,
-      'storage.get': () => null,
+      'storage.get': () => ({ splitNewPages: false }),
     });
     await boot(e);
     await new Promise((r) => setTimeout(r, 60));
@@ -991,7 +1253,7 @@ async function main() {
     doc.getElementById('page-tabs').querySelectorAll('.page-tab-label')[0].dispatch('click');
     await new Promise((r) => setTimeout(r, 40));
     assert(doc.getElementById('bar-subtitle').textContent.indexOf('בראשית') >= 0, 'first page restored');
-    assert(doc.getElementById('render-host').querySelector('.split-he').textContent.indexOf('בראשית ברא') >= 0, 'its Hebrew restored');
+    assert(doc.getElementById('render-host').querySelector('.sbs-he').textContent.indexOf('בראשית ברא') >= 0, 'its Hebrew restored');
 
     // Follow reader is off, so a reader move does not touch either page.
     e.emit('reader.current_ref_changed', { bookId: 'שמות', ref: 'פרק א', bookTitle: 'שמות' });
@@ -1009,6 +1271,8 @@ async function main() {
     const e = loadPlugin({
       'reader.getCurrentRef': () => current,
       'reader.getSectionTextMap': () => ({ __error: true, code: 'error.unsupported' }),
+      'reader.getCurrentState': () => null,
+      'reader.openBook': () => true,
       'library.getTree': () => null,
       'storage.get': () => null,
     });

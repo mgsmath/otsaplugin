@@ -307,6 +307,14 @@ body {
   min-width: 0;
 }
 
+/* The chip is inline inside the cell (it used to be a flex item), so it needs
+ * the inline-block box for min-width and centring to mean anything, and a gap
+ * of its own now that the flex gap is gone. */
+.sbs-cell .seg-num {
+  display: inline-block;
+  margin-inline-end: 6px;
+}
+
 /* The headings are a row of the same grid, so each label sits over its column. */
 .sbs-headrow {
   padding-top: 0;

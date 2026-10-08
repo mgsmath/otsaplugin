@@ -1,13 +1,7 @@
-/* otsaplugin — the six view modes.
+/* otsaplugin — the six reader views.
  *
- * Every renderer receives the same `ctx` and writes into `ctx.host`. None of
- * them touches innerHTML with pack data: text goes through createTextNode and
- * inline markup through OtzEn.renderSafe (see js/sanitize.js).
- *
- * Hebrew comes from Otzaria when it can be aligned; otherwise the view falls
- * back to Sefaria's normalised Hebrew and says so in the UI. A unit whose
- * Hebrew could not be aligned 1:1 is rendered at section level, never
- * misaligned.
+ * Every renderer receives the same `ctx` and writes into `ctx.host`. Pack text
+ * is rendered with createTextNode or the HTML allow-list in sanitize.js.
  */
 (function () {
   'use strict';
@@ -17,9 +11,9 @@
 
   // ---- address labels -----------------------------------------------------
 
-  Views.addressLabel = function (book, unit, index) {
+  Views.addressLabel = function (book, unit, index, segmentGroups) {
     var a = (unit.a && unit.a[0]) || 1;
-    var n = index + 1;
+    var n = segmentGroups && segmentGroups[index] > 0 ? segmentGroups[index] : index + 1;
     switch (book.schema) {
       case 'daf':
         return NS.dafLabel(a) + ':' + n;
@@ -29,7 +23,7 @@
       case 'siman':
         return a + ':' + n;
       default:
-        return String(n);
+        return String(index + 1);
     }
   };
 
@@ -38,8 +32,8 @@
     switch (book.schema) {
       case 'daf':
         return NS.t('דף') + ' ' + NS.dafLabel(a);
-      case 'mishnah':
-        return NS.t('פרק') + ' ' + a;
+      case 'siman':
+        return NS.t('סימן') + ' ' + a;
       default:
         return NS.t('פרק') + ' ' + a;
     }
@@ -76,45 +70,17 @@
     }
   }
 
-  /** Hebrew text for a segment: Otzaria's own when aligned, else Sefaria's. */
+  /** Hebrew text for a segment: Otzaria's own when it was safely aligned. */
   function hebrewFor(ctx, index) {
     if (ctx.hebrew && ctx.hebrew[index] !== undefined && ctx.hebrew[index] !== null) {
-      return { text: ctx.hebrew[index], source: 'otzaria' };
+      return ctx.hebrew[index];
     }
-    if (ctx.unit.h) return { text: ctx.unit.h[index] || '', source: 'sefaria' };
-    return { text: '', source: 'none' };
+    if (ctx.unit.h) return ctx.unit.h[index] || '';
+    return '';
   }
 
-  function creditLine(ctx) {
-    var line = el('div', 'credit-line');
-    var ids = {};
-    var prov = ctx.provenance;
-    for (var i = ctx.from; i < ctx.to; i++) {
-      if (prov[i] >= 0) ids[prov[i]] = 1;
-    }
-    var keys = Object.keys(ids);
-    if (!keys.length) {
-      line.appendChild(document.createTextNode(NS.t('אין תרגום זמין לקטע זה')));
-      return line;
-    }
-    line.appendChild(document.createTextNode(NS.t('מקור') + ': '));
-    for (var k = 0; k < keys.length; k++) {
-      var src = ctx.manifest.sources[Number(keys[k])];
-      if (!src) continue;
-      if (k) line.appendChild(document.createTextNode(' · '));
-      var chip = el('span', 'credit-chip');
-      chip.appendChild(document.createTextNode(src.title));
-      chip.appendChild(el('span', 'credit-lic', src.license));
-      chip.title = src.url || src.title;
-      line.appendChild(chip);
-    }
-    var more = el('button', 'linkish credit-more', NS.t('פרטים ורשיונות'));
-    more.type = 'button';
-    more.addEventListener('click', function () {
-      NS.openCredits(ctx.bookKey, ctx.unit.a[0]);
-    });
-    line.appendChild(more);
-    return line;
+  function address(ctx, index) {
+    return Views.addressLabel(ctx.book, ctx.unit, index, ctx.segmentGroups);
   }
 
   // ---- the views ----------------------------------------------------------
@@ -128,15 +94,14 @@
       if (!seg) continue;
       var li = el('li', 'seg');
       li.dataset.index = String(i);
-      if (ctx.options.numbers) li.appendChild(numberChip(Views.addressLabel(ctx.book, ctx.unit, i)));
+      if (ctx.options.numbers) li.appendChild(numberChip(address(ctx, i)));
       englishBody(li, seg, i, ctx);
       list.appendChild(li);
     }
     ctx.host.appendChild(list);
-    if (ctx.options.creditLine) ctx.host.appendChild(creditLine(ctx));
   };
 
-  /** 2. Side by side, aligned per segment, with synchronised highlight. */
+  /** 2. Side by side, aligned per segment when the text permits it. */
   Views.sidebyside = function (ctx) {
     var wrap = el('div', 'sbs');
     var grid = el('div', 'sbs-grid');
@@ -145,38 +110,31 @@
     var enCol = el('div', 'sbs-col sbs-en');
     heCol.dir = 'rtl';
     enCol.dir = 'ltr';
-    heCol.appendChild(el('div', 'sbs-head', NS.t('עברית') + (ctx.hebrewSource === 'sefaria' ? ' · ' + NS.t('ספריא') : '')));
+    heCol.appendChild(el('div', 'sbs-head', NS.t('עברית')));
     enCol.appendChild(el('div', 'sbs-head', NS.t('אנגלית')));
 
-    var aligned = ctx.unit.al === 1;
-    if (!aligned) {
-      var notice = el('div', 'notice', NS.t('היישור בין השורות אינו ודאי — מוצג ברמת הקטע כולו'));
-      notice.classList.add('warn');
-      ctx.host.appendChild(notice);
+    if (ctx.unit.al !== 1) {
       Views.sectionColumns(ctx, heCol, enCol);
       grid.appendChild(ctx.options.order === 'english-first' ? enCol : heCol);
       grid.appendChild(ctx.options.order === 'english-first' ? heCol : enCol);
       wrap.appendChild(grid);
       ctx.host.appendChild(wrap);
-      if (ctx.options.creditLine) ctx.host.appendChild(creditLine(ctx));
       return;
     }
 
     for (var i = ctx.from; i < ctx.to; i++) {
-      var he = hebrewFor(ctx, i);
       var hRow = el('div', 'sbs-row');
       hRow.dataset.index = String(i);
-      if (ctx.options.numbers) hRow.appendChild(numberChip(Views.addressLabel(ctx.book, ctx.unit, i)));
-      hRow.appendChild(el('span', 'seg-he-text', he.text));
+      if (ctx.options.numbers) hRow.appendChild(numberChip(address(ctx, i)));
+      hRow.appendChild(el('span', 'seg-he-text', hebrewFor(ctx, i)));
       heCol.appendChild(hRow);
 
       var eRow = el('div', 'sbs-row');
       eRow.dataset.index = String(i);
-      if (ctx.options.numbers) eRow.appendChild(numberChip(Views.addressLabel(ctx.book, ctx.unit, i)));
+      if (ctx.options.numbers) eRow.appendChild(numberChip(address(ctx, i)));
       englishBody(eRow, ctx.unit.e[i] || '', i, ctx);
       enCol.appendChild(eRow);
 
-      // Synchronised highlight: hover on either side lights the other.
       (function (idx, a, b) {
         function on() {
           a.classList.add('hl');
@@ -202,10 +160,9 @@
     grid.appendChild(ctx.options.order === 'english-first' ? heCol : enCol);
     wrap.appendChild(grid);
     ctx.host.appendChild(wrap);
-    if (ctx.options.creditLine) ctx.host.appendChild(creditLine(ctx));
   };
 
-  /** Section-level columns, used when 1:1 alignment could not be confirmed. */
+  /** Section-level columns used when a 1:1 Hebrew alignment is unavailable. */
   Views.sectionColumns = function (ctx, heCol, enCol) {
     var he = el('div', 'sbs-row section-level');
     he.dir = 'rtl';
@@ -230,13 +187,12 @@
       var block = el('div', 'ilv-block');
       block.dataset.index = String(i);
       var head = el('div', 'ilv-head');
-      if (ctx.options.numbers) head.appendChild(numberChip(Views.addressLabel(ctx.book, ctx.unit, i)));
+      if (ctx.options.numbers) head.appendChild(numberChip(address(ctx, i)));
       block.appendChild(head);
       if (aligned) {
-        var he = hebrewFor(ctx, i);
         var heLine = el('div', 'ilv-he');
         heLine.dir = 'rtl';
-        heLine.appendChild(el('span', 'seg-he-text', he.text));
+        heLine.appendChild(el('span', 'seg-he-text', hebrewFor(ctx, i)));
         block.appendChild(heLine);
       }
       var enLine = el('div', 'ilv-en');
@@ -246,19 +202,12 @@
       list.appendChild(block);
     }
     if (!aligned) {
-      list.insertBefore(
-        el('div', 'notice warn', NS.t('היישור בין השורות אינו ודאי — העברית מוצגת ברמת הקטע')),
-        list.firstChild
-      );
       var section = el('div', 'ilv-he section-level');
       section.dir = 'rtl';
-      section.appendChild(
-        el('span', 'seg-he-text', (ctx.unit.h || []).join(' '))
-      );
-      list.insertBefore(section, list.children[1] || null);
+      section.appendChild(el('span', 'seg-he-text', (ctx.unit.h || []).join(' ')));
+      list.insertBefore(section, list.firstChild);
     }
     ctx.host.appendChild(list);
-    if (ctx.options.creditLine) ctx.host.appendChild(creditLine(ctx));
   };
 
   /** 4. Flowing: continuous English for the whole chapter/daf. */
@@ -270,15 +219,12 @@
       if (!seg) continue;
       var span = el('span', 'flow-seg');
       span.dataset.index = String(i);
-      if (ctx.options.numbers) {
-        span.appendChild(numberChip(Views.addressLabel(ctx.book, ctx.unit, i)));
-      }
+      if (ctx.options.numbers) span.appendChild(numberChip(address(ctx, i)));
       englishBody(span, seg, i, ctx);
       span.appendChild(document.createTextNode(' '));
       flow.appendChild(span);
     }
     ctx.host.appendChild(flow);
-    if (ctx.options.creditLine) ctx.host.appendChild(creditLine(ctx));
   };
 
   /** 5. Peek: the selected passage plus/minus N segments of context. */
@@ -289,13 +235,12 @@
       block.dataset.index = String(i);
       if (i === ctx.focus) block.classList.add('focus');
       var head = el('div', 'peek-head');
-      head.appendChild(numberChip(Views.addressLabel(ctx.book, ctx.unit, i)));
+      head.appendChild(numberChip(address(ctx, i)));
       block.appendChild(head);
       if (ctx.unit.al === 1) {
-        var he = hebrewFor(ctx, i);
         var heLine = el('div', 'peek-he');
         heLine.dir = 'rtl';
-        heLine.appendChild(el('span', 'seg-he-text', he.text));
+        heLine.appendChild(el('span', 'seg-he-text', hebrewFor(ctx, i)));
         block.appendChild(heLine);
       }
       var enLine = el('div', 'peek-en');
@@ -305,22 +250,26 @@
       list.appendChild(block);
     }
     ctx.host.appendChild(list);
-    if (ctx.options.creditLine) ctx.host.appendChild(creditLine(ctx));
   };
 
   /** 6. Tap to reveal: Hebrew with the English hidden until tapped. */
   Views.reveal = function (ctx) {
     var list = el('div', 'reveal');
     var aligned = ctx.unit.al === 1;
+    if (!aligned) {
+      var section = el('div', 'reveal-section');
+      section.dir = 'rtl';
+      var sectionHebrew = ctx.hebrew && ctx.hebrew.length ? ctx.hebrew : (ctx.unit.h || []);
+      section.appendChild(el('span', 'seg-he-text', sectionHebrew.join(' ')));
+      list.appendChild(section);
+    }
     for (var i = ctx.from; i < ctx.to; i++) {
       var row = el('div', 'reveal-row');
       row.dataset.index = String(i);
       var he = el('div', 'reveal-he');
       he.dir = 'rtl';
-      if (ctx.options.numbers) he.appendChild(numberChip(Views.addressLabel(ctx.book, ctx.unit, i)));
-      he.appendChild(
-        el('span', 'seg-he-text', aligned ? hebrewFor(ctx, i).text : (ctx.unit.h || [])[i] || '')
-      );
+      if (ctx.options.numbers) he.appendChild(numberChip(address(ctx, i)));
+      if (aligned) he.appendChild(el('span', 'seg-he-text', hebrewFor(ctx, i)));
       var badge = el('span', 'reveal-badge', NS.t('הצג תרגום'));
       he.appendChild(badge);
       row.appendChild(he);
@@ -349,14 +298,7 @@
 
       list.appendChild(row);
     }
-    if (!aligned) {
-      list.insertBefore(
-        el('div', 'notice warn', NS.t('היישור בין השורות אינו ודאי — העברית מספריא, מנורמלת')),
-        list.firstChild
-      );
-    }
     ctx.host.appendChild(list);
-    if (ctx.options.creditLine) ctx.host.appendChild(creditLine(ctx));
   };
 
   Views.LIST = ['english', 'sidebyside', 'interleaved', 'flowing', 'peek', 'reveal'];

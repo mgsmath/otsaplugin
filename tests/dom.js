@@ -209,33 +209,29 @@ function makeFixture() {
   const ids = [
     'bar-title',
     'bar-subtitle',
+    'btn-translate',
+    'btn-split',
     'btn-reader',
     'btn-follow',
     'btn-options',
-    'btn-credits',
     'view-tabs',
     'notice',
     'status',
     'render-host',
     'scrim',
     'panel-options',
-    'panel-credits',
     'panel-close',
-    'panel-close-2',
-    'credits-body',
     'pack-info',
     'opt-numbers',
-    'opt-credit',
     'opt-order',
-    'opt-hebrew',
     'opt-context',
     'opt-import',
     'opt-bundled',
   ];
   ids.forEach((id) => {
-    const tag = id.startsWith('opt-') && (id === 'opt-order' || id === 'opt-hebrew' || id === 'opt-context')
+    const tag = id.startsWith('opt-') && (id === 'opt-order' || id === 'opt-context')
       ? 'select'
-      : id.startsWith('opt-') && (id === 'opt-numbers' || id === 'opt-credit')
+      : id.startsWith('opt-') && id === 'opt-numbers'
         ? 'input'
         : 'div';
     const node = document.register(id, new Node(tag));

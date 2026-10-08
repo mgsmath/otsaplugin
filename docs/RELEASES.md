@@ -1,36 +1,44 @@
 # Releases
 
-Every pull request merged into `main` publishes a GitHub release with a freshly
-built `.otzplugin`. Nothing is released that was not built in that same job, and
-no version number is ever chosen by hand.
+Every pull request merged into `main` publishes a GitHub release with freshly
+built libraries in it. Nothing is released that was not built in that same job,
+and no version number is ever chosen by hand.
 
 Workflow: [`.github/workflows/release.yml`](../.github/workflows/release.yml).
 
 ## What happens on a merge
 
 1. **Version.** `build/version.py next` reads the repository's release tags and
-   returns the newest `v*.*.*` with its patch component bumped by one — or
-   `0.0.1` when there is no tag yet. So the sequence is `v0.0.1`, `v0.0.2`, …
-   `v0.0.9`, `v0.0.10`. Ordering is numeric, not lexical; tags that do not look
-   like a release are ignored.
+   returns the newest `v*.*.*` with its patch component bumped by one —
+   `v1.1.0`, `v1.1.1`, … `v1.1.9`, `v1.1.10`. Ordering is numeric, not lexical,
+   and tags that do not look like a release are ignored. With no tags yet the
+   first release keeps the version `plugin/manifest.json` already declares, so
+   what is on `main` is what gets published.
 2. **Stamp.** That version is written into `plugin/manifest.json`. The manifest
    is round-tripped through `json` with its existing formatting, so the diff is
    the one `"version"` line and nothing else.
 3. **Fetch.** `build/fetch_export.sh` gets the pinned Sefaria-Export-Archive
-   checkout (`build/sefaria-export.pin`), blobless and sparse — only the work
-   directories `build/scope.py` globs, ~190 MB instead of the ~1.5 GB that all
-   of `json/Tanakh` and `json/Mishnah` hold. It is cached between runs and is
-   idempotent, so a stale or partial cache is repaired rather than trusted.
-4. **Build.** `./build/build_all.sh … --no-tests`: data pipeline → icon →
-   `.otzplugin`. The golden test suite is deliberately not part of the release
-   job; run `./build/build_all.sh` locally for it.
+   checkout (`build/sefaria-export.pin`), blobless and sparse: every
+   `<work>/English/*.json` and each work's `Hebrew/merged.json` under the roots
+   `build/scope.py` declares. That is **2.3 GB** where all five roots would be
+   **4.7 GB**, and the difference is Hebrew per-version files, Targum and other
+   languages `build/pipeline.py` never opens — the libraries are identical. It
+   fetches one root at a time with retries, is cached between runs, and audits
+   the result against the pinned tree, so a partial cache is repaired rather
+   than trusted.
+4. **Build.** `./build/build_all.sh … --no-tests` runs all six steps: the compact
+   library, the extended library, `dist/otsaplugin-extended.otzenpack`, the
+   icon, and `dist/otsaplugin.otzplugin`. The golden test suite is deliberately
+   not part of the release job; run `./build/build_all.sh` locally for it.
 5. **Validate.** The official
    [Otzaria plugin validator](https://github.com/Otzaria/otzaria-plugin-validator)
    runs against `plugin/` with `--fail-on-warnings`. A pack it rejects is not
-   released. If the validator itself cannot be fetched the step warns and
-   carries on, so a network blip cannot block a release.
-6. **Tag and publish.** Only now — after a successful build — does the job
-   commit the one-line version bump to `main`, tag that commit `v0.0.N`, and
+   released — it caught a real regression once already, when a plugin `name`
+   grew past the store's 14-character limit and stopped matching
+   `contributes.toolTab.title`. If the validator itself cannot be fetched the
+   step warns and carries on, so a network blip cannot block a release.
+6. **Tag and publish.** Only now — after a successful, validated build — does the
+   job commit the one-line version bump to `main`, tag that commit `v1.1.N`, and
    create the release with the assets below.
 
 A failed build therefore costs nothing: no tag, no commit, no release, and the
@@ -40,16 +48,27 @@ next merge simply tries again with the same version number.
 
 | Asset | What it is |
 |---|---|
-| `otsaplugin-v0.0.N.otzplugin` | the installable plugin (Otzaria → Settings → Plugins → install from file) |
-| `otsaplugin-v0.0.N-reports.zip` | the coverage, licence, merge-fidelity and size reports this build regenerated |
-| `otsaplugin-v0.0.N-datapack.zip` | the generated pack (`manifest.json` + per-work chunk JSON) the plugin ships inside `data/` |
-| `SHA256SUMS.txt` | SHA-256 of the three above |
+| `otsaplugin-v1.1.N.otzplugin` | the installable plugin, with the compact library built in |
+| `otsaplugin-v1.1.N-extended.otzenpack` | the extended library (Halakhah, Musar, nested commentaries), imported from the plugin's Settings panel |
+| `otsaplugin-v1.1.N-reports.zip` | coverage, licence, merge-fidelity and size reports for the compact library |
+| `otsaplugin-v1.1.N-extended-reports.zip` | the same reports for the extended library |
+| `SHA256SUMS.txt` | SHA-256 of every asset above |
 | *Source code (zip / tar.gz)* | this repository at the release tag, added by GitHub itself |
 
+The generated compact data pack is **not** attached separately: the
+`.otzplugin` already carries it as `data/*.js`, and at this scope the duplicate
+would be hundreds of megabytes. The extended library travels as the
+`.otzenpack`, which is the form the plugin imports.
+
+GitHub caps a single release asset at 2 GB and the `.otzenpack` is uncompressed,
+so the job measures it: over the cap it publishes the release without that one
+file, warns in the log, and says so in the release body instead of failing.
+
 The release body is generated by `build/release_notes.py` from the build that
-just ran — pack manifest, size report and the `.otzplugin` zip — so the numbers
-in it describe that release rather than restating the README. GitHub's own
-"what changed since the last tag" notes are appended underneath.
+just ran — both pack manifests, the size report, the archives themselves and
+their checksums — so the numbers in it describe that release rather than
+restating the README. GitHub's own "what changed since the last tag" notes are
+appended underneath.
 
 ## Cutting a release by hand
 
@@ -59,17 +78,20 @@ naming a pull request.
 
 ## Requirements
 
-- **Actions enabled** on the repository, and the default workflow token
-  permission may be read-only — the job declares `permissions: contents: write`
-  itself, which is enough unless the organisation forbids write tokens.
+- **Actions enabled**, and write-scoped workflow tokens allowed — the job
+  declares `permissions: contents: write` itself, which is enough unless the
+  organisation forbids write tokens outright.
 - **`main` must accept a push from the Actions token**, because the version bump
   is committed back to it. If a branch-protection rule requires pull requests or
-  status checks, either give the `github-actions[bot]` bypass or the job fails at
-  the push step with an error saying exactly that. Nothing is published in that
-  case — re-run the job once the rule is fixed.
+  status checks, give `github-actions[bot]` bypass, or the job fails at the push
+  step with an error saying exactly that. Nothing is published in that case —
+  fix the rule and re-run.
+- **Disk and patience.** The export checkout is ~2.3 GB and the build writes
+  another few hundred megabytes; a standard `ubuntu-latest` runner has room, but
+  the first run of a new pin pays the full fetch.
 - The workflow uses `pull_request_target`, which needs the file to be on `main`
   already. The pull request that adds it may not trigger a release of its own;
-  use the manual button once if `v0.0.1` does not appear.
+  use the manual button once if the first tag does not appear.
 
 ## Why `pull_request_target`
 
@@ -84,7 +106,7 @@ Two guards around the rest of it:
 
 - `concurrency: {group: release, cancel-in-progress: false}` — two merges
   landing together queue instead of racing for the same version number.
-- The job refuses to reuse a version: if `v0.0.N` already exists as a tag it
+- The job refuses to reuse a version: if `v1.1.N` already exists as a tag it
   fails rather than overwriting a release.
 
 There is no loop. GitHub does not start workflows for pushes made with
@@ -96,20 +118,22 @@ requests and manual runs.
 | Symptom | Cause and fix |
 |---|---|
 | Job fails at *Commit the version bump* with "could not push" | `main` is protected and the Actions token cannot push to it. Give `github-actions[bot]` bypass, or allow the token in the rule, then re-run. Nothing was published. |
-| Job fails with "v0.0.N already exists" | A previous run got as far as tagging. Delete the tag (`git push origin :refs/tags/v0.0.N`) and the release if it was created, then re-run — the job will not reuse a version number. |
-| *Fetch the Sefaria export* fails after its retries | GitHub could not serve the pinned blobs. Re-run; the cache means only what is missing gets fetched. `build/fetch_export.sh` retries each directory separately for exactly this reason. |
-| *Validate the packed plugin* warns "could not fetch the validator" | The validator repo was unreachable, so validation was skipped and the release still went out. Check the run log; re-validate locally with `node …/cli.js plugin --fail-on-warnings`. |
-| No release after merging | The workflow only runs from `main`. If the merged pull request was the one that added it, press **Run workflow** once. Also confirm the job was not skipped: it ignores pull requests that were closed without merging. |
-| Reports in the repo differ from the ones on the release | Expected. The job regenerates `reports/` from the pinned export and attaches them to the release; it commits only `plugin/manifest.json`. |
+| Job fails with "v1.1.N already exists" | A previous run got as far as tagging. Delete the tag (`git push origin :refs/tags/v1.1.N`) and the release if it was created, then re-run — the job will not reuse a version number. |
+| *Validate the packed plugin* fails | Read the error: it names the store rule that was broken (a `name` over 14 characters, a `name` that differs from `contributes.toolTab.title`, a permission the manifest does not justify). Fix the manifest and merge; nothing was published. |
+| *Fetch the Sefaria export* fails after its retries | GitHub could not serve the pinned blobs. Re-run — the audit means only what is missing gets fetched. The script fetches one root at a time with a transfer-rate floor for exactly this reason. |
+| *Validate* warns "could not fetch the validator" | The validator repo was unreachable, so validation was skipped and the release still went out. Re-validate locally with `node …/cli.js plugin --fail-on-warnings`. |
+| Release has no `.otzenpack` | It came out over GitHub's 2 GB asset cap; the log and the release body both say so. Build it locally with `./build/build_all.sh`. |
+| No release after merging | The workflow only runs from `main`. If the merged pull request was the one that added it, press **Run workflow** once. Also confirm the job was not skipped: it ignores pull requests closed without merging. |
+| Reports in the repo differ from the ones on the release | Expected. The job regenerates `reports/` from the pinned export and attaches them; it commits only `plugin/manifest.json`. |
 
 ## Reproducing a release locally
 
 ```sh
-build/fetch_export.sh                       # pinned export, ~190 MB, into ref/
+build/fetch_export.sh                       # pinned export into ref/ (~2.3 GB)
 python3 build/version.py next               # what the next release would be
-python3 build/version.py stamp 0.0.1        # write it into the manifest
+python3 build/version.py stamp 1.1.0        # write it into the manifest
 ./build/build_all.sh --no-tests             # exactly what the job runs
-python3 build/release_notes.py --version 0.0.1 --commit "$(git rev-parse HEAD)"
+python3 build/release_notes.py --version 1.1.0 --commit "$(git rev-parse HEAD)"
 ```
 
 `build/version.py stamp` only touches the manifest; `./build/build_all.sh`

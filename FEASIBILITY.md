@@ -1,81 +1,65 @@
-# Feasibility study (Phase 0)
+# Feasibility notes
 
-Everything below was established by reading the Otzaria app source, the plugin SDK
-docs and the Sefaria export — not by guesswork. Where a claim could not be
-executed here (no Flutter/Dart, no WebView in this sandbox) it is marked
-*verified by source* vs *verified by running*.
+This note separates facts checked in source or tests from work that still requires
+a full export checkout or a running Otzaria app.
 
-## (a) Where can a plugin display English next to a Hebrew book?
+## Reader placement and actions
 
-No API docks a plugin *inside* the reader. The real surfaces are:
+1. **Plugin page:** Otzaria renders `plugin/index.html` as a `ToolTab`; this is the
+   translation reader's primary surface.
+2. **Plugin split view:** the **Split view** button shows Hebrew and English in two
+   columns inside the plugin panel.
+3. **Host-app split pane:** Otzaria's `CombinedTab` can place the plugin tab beside
+   a reader tab, but that split is user-driven; the plugin SDK does not expose a
+   host-level split command. Settings names the host tab-menu action in English.
+4. **Reader context menu:** the manifest contributes two actions—**Translate
+   selected passage** and **Translate side by side**. Both open the plugin with
+   the selected reference; the second selects the built-in two-column view.
+5. **Follow reader:** **Follow reader** subscribes to
+   `reader.current_ref_changed`; turning it on also refreshes from
+   `reader.getCurrentRef`. The handler normalizes the known title, id and
+   reference payload variants and ignores events when follow mode is off.
 
-1. **Plugin page (ToolTab).** `reading_screen.dart:670-671` renders the plugin's
-   `index.html` as a tab. This is our primary surface.
-2. **Side-by-side, user-driven.** `CombinedTab` accepts any two non-Combined
-   panes; `_onCreateCombinedTab` (`tabs_bloc.dart:1424-1474`) has no type
-   restriction and the "הצג לצד" menu (`tab_context_menu.dart:196-222`) lists every
-   tab. So a user can place the plugin tab beside the reader tab. That is a user
-   action, not a plugin API — we document it rather than promise it.
-3. **Replace the reader's text area.** `reader.setDefaultTextReader` can swap the
-   text pane of a `type:"text"` book inside `CombinedView`/`SplitedViewScreen`.
-   We deliberately do **not** take this over; it would replace Otzaria's own
-   Hebrew UI, which is out of scope and high-risk.
+The plugin does not replace Otzaria's Hebrew text pane. These app/SDK constraints
+were checked against the host source; live WebView behaviour still needs a device.
 
-*Verified by source.*
+## Offline operation
 
-## (b) Context-menu entry (the "Peek" flow)
+The manifest declares no network access. Built-in data is loaded as local classic
+scripts, which works on the plugin's `file://` origins. An optional extended
+`.otzenpack` is selected with Otzaria's file picker and read through its internal
+range-capable file URL. It does not require the plugin's network permission.
 
-`contributes.startup.contextMenuItems` is parsed **in Dart with no WebView**.
-It needs `app.startup_contributions` (default on) + `reader.context_menu`, at most
-two top-level items, and `openPlugin:true`. Crucially,
-`plugin_startup_contributions.dart::_contextMenuItemActivatesBackground` shows an
-`openPlugin` item is queued and delivered **after boot even when the plugin runs no
-background instance**. So we can be completely backgroundless. Payload:
-`{itemId, selectedText, currentRef, currentBook, currentBookId, param}`.
-*Verified by source.*
+## Data scope and delivery
 
-## (c) Offline operation
+Recursive discovery targets the Sefaria export roots `Tanakh`, `Mishnah`,
+`Talmud`, `Halakhah` and `Musar`. This includes nested works such as Tanakh and
+Mishnah commentaries, Mishneh Torah/Rambam and Mishnah Berurah when an eligible
+English version exists.
 
-`installed_plugin.dart:87,91`: a plugin is hidden in offline mode only when
-`networkEnabled && networkAccessGranted`. We declare **no** `network` block, so the
-plugin is never hidden offline and loads nothing remote. *Verified by source.*
+`build/build_all.sh` is designed to produce:
 
-## (d) Background instance
+- A built-in library for all eligible texts under Tanakh, Mishnah and Talmud.
+- `dist/otsaplugin-extended.otzenpack` for those roots plus Halakhah and Musar.
 
-Declarative `contributes.startup` needs no JS engine. Background instances are lazy,
-need `app.run_on_startup` (default off), and auto-close after ~3 min idle.
-**Decision: ship no background instance and no `app.run_on_startup`.** The
-declarative context menu plus `openPlugin:true` gives us the selection for free.
-*Verified by source.*
+The full export is not checked out in the current workspace, so the current total
+coverage, archive size and app-store validation are **not verified**. Texts with
+no available English version cleared by the selected build policy remain
+unavailable rather than being invented or sourced at runtime.
 
-## (e) No existing duplicate plugin
+## Redistribution data
 
-GitHub searches found no plugin that shows Sefaria merged English. Bundled ids are
-`com.otzaria_word_editor.superdoc`, `com.otzaria.kidush-hachodesh`,
-`otzaria.plugins_directory`; ours is distinct (`org.sefaria.otzaria-english`).
-*Verified by source.*
+The reader no longer shows a Credits/Licences panel, per-passage credits, or a
+detailed source browser. The build nevertheless retains provenance internally
+and uses `--policy open` by default: English versions with Public Domain, CC0,
+CC-BY or CC-BY-SA terms are accepted; unknown licences and CC-BY-NC are excluded.
+See `docs/LICENSING.md` for maintainer policy notes.
 
-## (f) Is there English in Otzaria's own DB?
+## Packaging constraints
 
-No. `Database.sq` L482-516 builds the library from **Sefaria's Hebrew merged text**
-only; `book_version.license` exists but is not exposed to plugins (`database.*`
-allows only `talmud_synopsis` and `external_catalog`). So we must bundle our own
-English, derived from Sefaria's export. *Verified by source.*
-
-## (g) Does Sefaria's merged.json give per-segment provenance or licence?
-
-No. All 185 sampled `merged.json` files carry neither per-segment provenance nor a
-top-level `license`; `versions` is a flat whole-file list. Therefore provenance must
-be **rebuilt** by re-running Sefaria's merge over the per-version files (which do
-carry `license`, `priority`, `actualLanguage`). See `docs/MAPPING.md` and
-`reports/merge-fidelity.md` — our rebuild reproduces `merged.json` exactly.
-*Verified by running.*
-
-## Store / packaging limits
-
-`Otzaria_Website/src/lib/pluginLimits.js`: archive ≤ 50 MB · ≤ 1024 entries ·
-≤ 150 MB expanded · ≤ 50 MB/entry · ≤ 16 MB per code entry · 256 KB manifest ·
-5 MB image. The store treats validator **warnings as blocking**
-(`pluginValidationCore.js:31`), so the pack must validate with **zero warnings**.
-Our current pack: 106 entries, 10.9 MB → 3.3 MB zipped; validator: 0 errors,
-0 warnings. *Verified by running.*
+The historical Otzaria plugin-store limits were checked in the validator source:
+50 MB archive, 1,024 entries, 150 MB expanded, and 16 MB per code entry, among
+other constraints. The previous compact plugin met those limits, but the expanded
+scope and new packs have not been built against the pinned export in this
+workspace. Re-run `build/build_all.sh` and the official validator before release;
+zero warnings are required.

@@ -1,8 +1,8 @@
 """Which Sefaria works the pack covers, and how they are keyed for Otzaria.
 
-Stages are cumulative: ``tanakh`` (stage 1), ``mishnah`` (stage 2),
-``talmud`` (stage 3). Later stages (Mishneh Torah, Shulchan Arukh, Midrash,
-commentaries) are the same shape — add a glob to ``STAGE_GLOBS``.
+Stages correspond to the major Sefaria export sections. Discovery walks each
+root recursively, so commentaries and nested works are included alongside the
+base texts when an English version exists.
 
 Nothing here reads the network or the disk: it is a table plus a few helpers.
 """
@@ -14,31 +14,19 @@ from typing import Dict, List, Optional
 
 # Export-relative globs, one per stage. A "book directory" is the directory that
 # directly contains ``English/`` and ``Hebrew/``.
+# Export-relative roots. Each root is walked recursively, and a directory is a
+# candidate work when it contains an English/ child. This captures nested
+# commentaries (including Rashi/Rambam and Mishnah Berurah) without hard-coding
+# individual books or losing their category path.
 STAGE_GLOBS: Dict[str, List[str]] = {
-    "tanakh": [
-        "json/Tanakh/Torah/*",
-        "json/Tanakh/Prophets/*",
-        "json/Tanakh/Writings/*",
-    ],
-    "mishnah": [
-        "json/Mishnah/Seder Zeraim/*",
-        "json/Mishnah/Seder Moed/*",
-        "json/Mishnah/Seder Nashim/*",
-        "json/Mishnah/Seder Nezikin/*",
-        "json/Mishnah/Seder Kodashim/*",
-        "json/Mishnah/Seder Tohorot/*",
-    ],
-    "talmud": [
-        "json/Talmud/Bavli/Seder Zeraim/*",
-        "json/Talmud/Bavli/Seder Moed/*",
-        "json/Talmud/Bavli/Seder Nashim/*",
-        "json/Talmud/Bavli/Seder Nezikin/*",
-        "json/Talmud/Bavli/Seder Kodashim/*",
-        "json/Talmud/Bavli/Seder Tohorot/*",
-    ],
+    "tanakh": ["json/Tanakh"],
+    "mishnah": ["json/Mishnah"],
+    "talmud": ["json/Talmud"],  # Bavli, Yerushalmi, and any included commentaries
+    "halakhah": ["json/Halakhah"],  # Mishneh Torah, Shulchan Arukh, Mishnah Berurah, etc.
+    "musar": ["json/Musar"],
 }
 
-STAGE_ORDER = ["tanakh", "mishnah", "talmud"]
+STAGE_ORDER = ["tanakh", "mishnah", "talmud", "halakhah", "musar"]
 
 # Schema class drives how the runtime formats an address and how it parses an
 # Otzaria ref. Derived from Sefaria's own ``sectionNames``; see
@@ -74,9 +62,11 @@ def schema_of_section_names(section_names: Optional[List[str]], depth: int) -> s
 
 
 def stage_of_book_dir(rel_dir: str) -> Optional[str]:
-    for stage, globs in STAGE_GLOBS.items():
-        for g in globs:
-            if rel_dir.startswith(g.rsplit("/*", 1)[0] + os.sep):
+    rel = os.path.normpath(rel_dir)
+    for stage, roots in STAGE_GLOBS.items():
+        for root in roots:
+            root = os.path.normpath(root)
+            if rel == root or rel.startswith(root + os.sep):
                 return stage
     return None
 

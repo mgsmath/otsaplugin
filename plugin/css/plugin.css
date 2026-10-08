@@ -4,8 +4,8 @@
  * copies `plugin.boot.theme.colorScheme` into CSS custom properties). Nothing is
  * hardcoded here, so the plugin follows the user's light/dark/contrast theme.
  *
- * The plugin UI is RTL Hebrew; the English translation itself is LTR and gets an
- * explicit direction so it never renders inside-out.
+ * The controls are always English/LTR; Hebrew and English source text each set
+ * their own direction where needed.
  */
 
 :root {
@@ -116,14 +116,25 @@ body {
   gap: 6px;
 }
 
-@media (max-width: 600px) {
+@media (max-width: 760px) {
   .topbar {
-    height: 44px;
-    padding: 0 8px;
+    height: auto;
+    min-height: 44px;
+    padding: 6px 8px;
     gap: 6px;
+    flex-wrap: wrap;
   }
   .topbar .bar-title {
     display: none;
+  }
+  .topbar-actions {
+    max-width: 100%;
+    overflow-x: auto;
+    margin-inline-start: auto;
+  }
+  .icon-btn {
+    padding: 5px 9px;
+    font-size: 0.8125rem;
   }
 }
 
@@ -389,6 +400,13 @@ body {
   cursor: pointer;
 }
 
+.reveal-section {
+  font-family: var(--font-main);
+  direction: rtl;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--color-outline-variant);
+}
+
 .reveal-he {
   font-family: var(--font-main);
   display: flex;
@@ -435,47 +453,6 @@ body {
   margin-top: 4px;
   direction: ltr;
   text-align: left;
-}
-
-/* ---- credit line --------------------------------------------------------- */
-
-.credit-line {
-  font-family: var(--font-ui);
-  font-size: 0.8125rem;
-  color: var(--color-on-surface-variant);
-  margin-top: 14px;
-  padding-top: 10px;
-  border-top: 1px solid var(--color-outline-variant);
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  align-items: center;
-}
-
-.credit-chip {
-  background: var(--color-surface-container);
-  border-radius: var(--radius-sm);
-  padding: 2px 8px;
-}
-
-.credit-lic {
-  font-size: 0.6875rem;
-  margin-inline-start: 6px;
-  color: var(--color-on-primary-container);
-  background: var(--color-primary-container);
-  border-radius: var(--radius-sm);
-  padding: 1px 5px;
-}
-
-.linkish {
-  border: none;
-  background: none;
-  color: var(--color-primary);
-  text-decoration: underline;
-  cursor: pointer;
-  padding: 0;
-  font-family: var(--font-ui);
-  font-size: 0.8125rem;
 }
 
 /* ---- panels -------------------------------------------------------------- */
@@ -574,64 +551,14 @@ select {
   color: var(--color-on-surface-variant);
 }
 
-/* ---- credits ------------------------------------------------------------- */
+/* ---- available texts ----------------------------------------------------- */
 
-.credits-head h2,
-.credits-head h3,
-.credits h3,
 .coverage h2,
 .coverage h3 {
   font-family: var(--font-ui);
   font-size: 1rem;
   margin: 16px 0 8px;
   color: var(--color-on-surface);
-}
-
-.credits-meta,
-.meta-row {
-  font-family: var(--font-ui);
-  font-size: 0.8125rem;
-  color: var(--color-on-surface-variant);
-}
-
-.src-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-family: var(--font-ui);
-  font-size: 0.8125rem;
-}
-
-.src-table th,
-.src-table td {
-  text-align: start;
-  padding: 6px 8px;
-  border-bottom: 1px solid var(--color-outline-variant);
-  vertical-align: top;
-}
-
-.src-table th {
-  color: var(--color-on-surface-variant);
-  font-weight: 600;
-}
-
-.src-table td.num {
-  text-align: end;
-  white-space: nowrap;
-}
-
-.src-table a {
-  color: var(--color-primary);
-  word-break: break-all;
-}
-
-.licence-list dt {
-  font-weight: 600;
-  margin-top: 10px;
-}
-
-.licence-list dd {
-  margin: 2px 0 0;
-  color: var(--color-on-surface-variant);
 }
 
 /* ---- empty / ambiguous / coverage ---------------------------------------- */

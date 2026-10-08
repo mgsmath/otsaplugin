@@ -7,22 +7,23 @@
 #   DEST    where to put the checkout   (default ref/Sefaria-Export-Archive)
 #   COMMIT  which revision to check out (default build/sefaria-export.pin)
 #
-# Blobless + sparse, and deliberately narrow: only the work directories
-# build/scope.py globs, plus the two Bavli tractates build/build_all.sh passes
-# to --talmud. That is ~190 MB of JSON. All of json/Tanakh and json/Mishnah
-# would be ~1.5 GB, and the extra ~1.35 GB is commentary (Rishonim, Acharonim,
-# Targum, Modern Commentary) that the pipeline never opens — build/pipeline.py
-# reads only <work>/English/*.json and <work>/Hebrew/merged.json, so the pack
-# built from this narrow checkout is byte-for-byte the pack built from the wide
-# one. Keep SPARSE_DIRS in step with STAGE_GLOBS in build/scope.py.
+# Blobless, and sparse in the non-cone sense: the patterns match only the two
+# kinds of file the pipeline opens — every <work>/English/*.json and every
+# <work>/Hebrew/merged.json — under the roots build/scope.py declares. Measured
+# against the pinned commit, that is 2.3 GB where checking out all five roots
+# would be 4.7 GB, and the difference is Hebrew per-version files, Targum,
+# Aramaic and other languages the pipeline never reads. The roots come from
+# scope.py at run time, so widening the build widens this fetch with it.
 #
-# The fetch is split one directory at a time so no single request has to carry
-# the whole payload, and every step is retried — a partial-clone blob fetch is
-# the one part of this build that depends on a flaky network.
+# The fetch is applied one root at a time so no single on-demand blob request
+# has to carry the whole payload, and every step is retried: a partial-clone
+# blob fetch is the one part of this build that depends on a flaky network.
 #
-# Idempotent: a checkout already at COMMIT with the sparse set applied is left
-# alone, so it is safe to run before every build (and to restore from a CI
-# cache). Nothing is ever written outside DEST.
+# Idempotent and self-verifying. Before fetching anything it asks git which
+# paths the pinned tree holds under those roots and compares that with what is
+# on disk, so a restored CI cache that is missing files is repaired rather than
+# trusted — including Hebrew/merged.json, whose absence the pipeline would
+# otherwise absorb silently as "no Hebrew available".
 #
 # Environment:
 #   SEFARIA_EXPORT_REPO  clone URL (default the public GitHub repo; override to
@@ -38,19 +39,22 @@ DEST="${1:-ref/Sefaria-Export-Archive}"
 COMMIT="${2:-${PINNED_COMMIT:-3f1013631fdfe452e953a93a2c5f921319e394ed}}"
 TRIES="${FETCH_TRIES:-5}"
 
-SPARSE_DIRS=(
-  "json/Tanakh/Torah"
-  "json/Tanakh/Prophets"
-  "json/Tanakh/Writings"
-  "json/Mishnah/Seder Zeraim"
-  "json/Mishnah/Seder Moed"
-  "json/Mishnah/Seder Nashim"
-  "json/Mishnah/Seder Nezikin"
-  "json/Mishnah/Seder Kodashim"
-  "json/Mishnah/Seder Tahorot"
-  "json/Talmud/Bavli/Seder Zeraim/Berakhot"
-  "json/Talmud/Bavli/Seder Moed/Shabbat"
-)
+# The export roots the build reads, straight from build/scope.py.
+mapfile -t ROOTS < <(python3 -c '
+import sys
+sys.path.insert(0, "build")
+from scope import STAGE_GLOBS, STAGE_ORDER
+seen = []
+for stage in STAGE_ORDER:
+    for root in STAGE_GLOBS.get(stage, []):
+        if root not in seen:
+            seen.append(root)
+print("\n".join(seen))
+')
+if [ "${#ROOTS[@]}" -eq 0 ]; then
+  echo "[fetch] error: build/scope.py declares no export roots" >&2
+  exit 1
+fi
 
 log() { printf '[fetch] %s\n' "$*"; }
 
@@ -70,60 +74,111 @@ retry() {
   done
 }
 
-# A checkout is usable when it is at COMMIT and every sparse directory that
-# exists in the tree is materialised on disk.
-is_ready() {
-  [ -d "$DEST/.git" ] || return 1
-  local head
-  head="$(git -C "$DEST" rev-parse HEAD 2>/dev/null || true)"
-  [ -n "$head" ] || return 1
-  [ "$head" = "$(git -C "$DEST" rev-parse --verify "$COMMIT^{commit}" 2>/dev/null || true)" ] || return 1
-  local d
-  for d in "${SPARSE_DIRS[@]}"; do
-    if git -C "$DEST" cat-file -e "$COMMIT:$d" 2>/dev/null && [ ! -d "$DEST/$d" ]; then
-      return 1
-    fi
+# Write the sparse-checkout patterns for the roots given so far. Non-cone, so
+# these are gitignore-style: a leading / anchors at the repository root and **
+# crosses category directories.
+write_patterns() {
+  local sparse="$DEST/.git/info/sparse-checkout"
+  mkdir -p "$(dirname "$sparse")"
+  : > "$sparse"
+  local root
+  for root in "$@"; do
+    printf '/%s/**/English/\n' "$root" >> "$sparse"
+    printf '/%s/**/Hebrew/merged.json\n' "$root" >> "$sparse"
   done
-  return 0
 }
 
-# Fail loudly if the checkout holds nothing the pipeline could build from — the
-# difference between "the fetch worked" and "the fetch worked and is complete".
-verify() {
-  log "work directories visible to build/scope.py:"
-  python3 - "$DEST" <<'PY'
-import glob
+# Compare the pinned tree with the working directory. Exit non-zero when
+# anything the pipeline could read is missing. With --quiet it only reports
+# through the exit code, so it can be used as a readiness test.
+audit() {
+  local quiet="${1:-}"
+  DEST="$DEST" COMMIT="$COMMIT" QUIET="$quiet" python3 - "${ROOTS[@]}" <<'PY'
+import fnmatch
+import os
+import subprocess
+import sys
+
+dest = os.environ["DEST"]
+commit = os.environ["COMMIT"]
+quiet = os.environ.get("QUIET") == "--quiet"
+roots = sys.argv[1:]
+
+
+def say(msg):
+    if not quiet:
+        print(msg)
+
+
+def tracked(pattern):
+    """Every path in the pinned tree matching a gitignore-style pathspec."""
+    out = subprocess.run(
+        ["git", "-C", dest, "ls-files", "--", ":(glob)" + pattern],
+        capture_output=True, text=True, check=True,
+    ).stdout
+    return [line for line in out.splitlines() if line.strip()]
+
+
+missing_total = 0
+for root in roots:
+    for pattern in (f"{root}/**/English/*.json", f"{root}/**/Hebrew/merged.json"):
+        want = tracked(pattern)
+        have = [p for p in want if os.path.exists(os.path.join(dest, p))]
+        missing = len(want) - len(have)
+        missing_total += missing
+        label = "English/*.json" if pattern.endswith("*.json") else "Hebrew/merged.json"
+        say(f"[fetch]   {root:16s} {label:18s} {len(have):6d}/{len(want):<6d}"
+            + (f"  MISSING {missing}" if missing else ""))
+
+if missing_total:
+    print(f"[fetch] error: {missing_total} file(s) the pipeline reads are missing "
+          f"from {dest}", file=sys.stderr)
+    sys.exit(1)
+say("[fetch]   complete: every file the pipeline reads is on disk")
+PY
+}
+
+# What the build will actually find, counted by the build's own discovery code.
+report_works() {
+  log "works visible to build/pipeline.py:"
+  DEST="$DEST" python3 - <<'PY'
 import os
 import sys
 
 sys.path.insert(0, "build")
-from scope import STAGE_GLOBS  # noqa: E402
+from pipeline import discover_book_dirs  # noqa: E402
+from scope import STAGE_ORDER  # noqa: E402
 
-root = sys.argv[1]
+dest = os.environ["DEST"]
 total = 0
-for stage in ("tanakh", "mishnah", "talmud"):
-    hits = set()
-    for pattern in STAGE_GLOBS.get(stage, []):
-        for d in glob.glob(os.path.join(root, pattern)):
-            if os.path.isdir(os.path.join(d, "English")):
-                hits.add(d)
-    total += len(hits)
-    print(f"[fetch]   {stage}: {len(hits)}")
+for stage in STAGE_ORDER:
+    rows = discover_book_dirs(dest, [stage], None)
+    total += len(rows)
+    print(f"[fetch]   {stage}: {len(rows)}")
 if total == 0:
     raise SystemExit("[fetch] error: no buildable work directories — sparse checkout incomplete?")
 print(f"[fetch]   total: {total}")
 PY
 }
 
-if is_ready; then
-  log "$DEST already at ${COMMIT:0:12} with the full sparse set; nothing to fetch"
-  verify
+head_matches() {
+  [ -d "$DEST/.git" ] || return 1
+  local head
+  head="$(git -C "$DEST" rev-parse HEAD 2>/dev/null || true)"
+  [ -n "$head" ] || return 1
+  [ "$head" = "$(git -C "$DEST" rev-parse --verify "$COMMIT^{commit}" 2>/dev/null || true)" ]
+}
+
+if head_matches && audit --quiet >/dev/null 2>&1; then
+  log "$DEST already complete at ${COMMIT:0:12}; nothing to fetch"
+  report_works
   exit 0
 fi
 
 log "Sefaria export $REPO"
 log "  dest   $DEST"
 log "  commit $COMMIT"
+log "  roots  ${ROOTS[*]}"
 
 if [ ! -d "$DEST/.git" ]; then
   mkdir -p "$(dirname "$DEST")"
@@ -135,24 +190,23 @@ fi
 git -C "$DEST" config http.postBuffer 524288000
 git -C "$DEST" config http.lowSpeedLimit 1000
 git -C "$DEST" config http.lowSpeedTime 120
+git -C "$DEST" config core.sparseCheckout true
+git -C "$DEST" config core.sparseCheckoutCone false
 
-retry "sparse-checkout init" git -C "$DEST" sparse-checkout init --cone
+# First root, then the commit: that keeps the initial blob fetch to one root
+# instead of the whole sparse set at once.
+write_patterns "${ROOTS[0]}"
+retry "checkout $COMMIT (${ROOTS[0]})" git -C "$DEST" checkout --detach "$COMMIT"
 
-# First directory only, then the commit — that keeps the initial blob fetch to a
-# single tree instead of the whole sparse set at once.
-retry "sparse-checkout set ${SPARSE_DIRS[0]}" \
-  git -C "$DEST" sparse-checkout set "${SPARSE_DIRS[0]}"
-retry "checkout $COMMIT" git -C "$DEST" checkout --detach "$COMMIT"
-
-for dir in "${SPARSE_DIRS[@]:1}"; do
-  # A directory the pinned tree does not have is not an error (the export
-  # reorganises itself); it just has nothing to fetch.
-  if ! git -C "$DEST" cat-file -e "$COMMIT:$dir" 2>/dev/null; then
-    log "  skip $dir (not in this commit)"
-    continue
-  fi
-  retry "sparse-checkout add $dir" git -C "$DEST" sparse-checkout add "$dir"
+# Apply the remaining roots one at a time, each its own fetch.
+idx=1
+while [ "$idx" -lt "${#ROOTS[@]}" ]; do
+  root="${ROOTS[$idx]}"
+  write_patterns "${ROOTS[@]:0:$((idx + 1))}"
+  retry "sparse-checkout $root" git -C "$DEST" sparse-checkout reapply
+  idx=$((idx + 1))
 done
 
 log "checkout complete: $(du -sh "$DEST" 2>/dev/null | cut -f1) in $DEST"
-verify
+audit
+report_works

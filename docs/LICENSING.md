@@ -1,45 +1,29 @@
-# Licensing policy
+# Redistribution policy (maintainer notes)
 
-## The problem
+The plugin no longer displays a Credits/Licences panel or source list in the
+reader UI. The build policy and per-segment provenance remain in place: removing
+required attribution or redistributing a version whose terms do not allow it would
+not be an appropriate way to simplify the interface.
 
-Sefaria's `merged.json` carries no licence, and a work's `English/` directory mixes
-licences — including **CC-BY-NC** (non-commercial) and files whose licence is
-`unknown`. Bundling those into a downloadable plugin would redistribute text we may
-not. So the pipeline makes an explicit, documented decision about which versions may
-ship.
+## Included versions
 
-## The policies
+`--policy open` keeps English versions marked Public Domain, CC0, CC-BY or
+CC-BY-SA. `--policy include-nc` is available for personal builds and additionally
+keeps CC-BY-NC. Versions with unknown licences, missing licence data, or a
+non-English `actualLanguage` are excluded by the shipped `open` build.
 
-`--policy open` (the shipped default) keeps only versions whose licence is
-**Public Domain, CC0, CC-BY or CC-BY-SA** and whose `actualLanguage` is English.
-`--policy include-nc` additionally keeps **CC-BY-NC** for *personal* builds (clearly
-labelled non-commercial in the Credits screen). `unknown` is never kept by either.
+The source files in Sefaria's `English/` directories can mix languages and
+licences; the pipeline reads each version's metadata rather than trusting
+`merged.json`. When no included version supplies a segment, that segment stays
+empty and the reader reports that the translation is unavailable.
 
-A version whose `actualLanguage` is not English is dropped even with a free licence
-(see `docs/MAPPING.md` — the merge is language-scoped).
+## Internal provenance
 
-## The decision for excluded segments
+The pack keeps the contributing version, licence and source URL as data metadata.
+`reports/licenses.*` and coverage reports are for maintainers and are not shown by
+the reader UI. Keep this provenance in generated packs when changing the data
+format or importer. Sources with terms that prohibit redistribution must not be
+added to downloadable builds.
 
-When no kept version covers a segment, the segment is emitted **empty** and counted
-as `missing` (`reports/coverage.md`). The runtime shows "no translation under a
-redistributable licence for some lines (n/m)" and never substitutes an
-unlicenced one. We prefer a visibly absent verse to an unlawfully present one.
-
-## Attribution
-
-Every kept segment records its source version (RLE provenance in the pack). The UI:
-
-- shows a compact credit line per passage (version + licence chip + link),
-- has an always-reachable Credits/Licenses screen listing every version, its
-  licence, segment count and source URL, plus the obligations per licence family.
-
-The full table for the shipped build is `reports/licenses.md` / `.csv`. Current
-`open` build: 6 versions, 29,340 segments (11,159 CC-BY, 18,181 PD/CC0).
-
-## Why this is safe to automate
-
-The licence string and `actualLanguage` live on the per-version files Sefaria ships;
-we read them rather than guess. Anything missing or unrecognised falls to `unknown`
-and is excluded. The licence→family mapping is in one place
-(`build/pipeline.py::LICENSE_FAMILY`) and surfaced in the manifest so the Credits
-screen never hardcodes licence text.
+This document describes the build's selection policy, not legal advice. Review
+the original version metadata and applicable terms before distributing a build.

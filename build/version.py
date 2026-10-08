@@ -1,11 +1,16 @@
 #!/usr/bin/env python3
 """Release versioning: compute the next version and stamp it into the manifest.
 
-The source of truth is the repository's release tags (``v0.0.1``, ``v0.0.2``, …).
+The source of truth is the repository's release tags (``v1.1.0``, ``v1.1.1``, …).
 Every release bumps the patch component by one, so the sequence never skips and
 never needs a human to decide a number:
 
-    v0.0.1 -> v0.0.2 -> … -> v0.0.9 -> v0.0.10
+    v1.1.0 -> v1.1.1 -> … -> v1.1.9 -> v1.1.10
+
+With no release tags yet, the first release publishes the version the manifest
+already declares — the build that is on ``main`` is the build that gets
+released, so it keeps the number it was written with. ``--first`` overrides that
+fallback for a repository whose manifest carries no usable version.
 
 ``stamp`` rewrites ``plugin/manifest.json`` in place. The manifest is round-tripped
 through ``json`` with the same formatting it already uses (2-space indent, raw
@@ -21,7 +26,7 @@ Subcommands
 Usage::
 
     python3 build/version.py next
-    python3 build/version.py stamp 0.0.7
+    python3 build/version.py stamp 1.1.7
     python3 build/version.py stamp "$(python3 build/version.py next)"
 
 Stdlib only, like the rest of ``build/``.
@@ -74,22 +79,30 @@ def release_tags(repo: str = REPO_ROOT) -> List[Tuple[int, int, int]]:
     return sorted(found)
 
 
-def next_version(repo: str = REPO_ROOT, first: str = FIRST_VERSION,
+def next_version(repo: str = REPO_ROOT, first: Optional[str] = None,
+                 manifest: str = DEFAULT_MANIFEST,
                  taken: Optional[set] = None) -> str:
     """Latest release tag with its patch component bumped by one.
 
-    With no release tags yet the sequence starts at ``first`` (``0.0.1``).
-    ``taken`` lets a caller skip versions that are already used but not yet
-    visible as tags (a release in flight, say).
+    With no release tags yet the first release keeps the version the manifest
+    already declares — what is on ``main`` is what gets published. ``first`` (or
+    ``FIRST_VERSION``) is only the fallback for a manifest with no usable
+    version. ``taken`` lets a caller skip versions that are already used but not
+    yet visible as tags (a release in flight, say).
     """
     tags = release_tags(repo)
-    if not tags:
-        candidate = parse_version(first)
-        if candidate is None:
-            raise SystemExit(f"version: --first {first!r} is not X.Y.Z")
-    else:
+    if tags:
         major, minor, patch = tags[-1]
         candidate = (major, minor, patch + 1)
+    else:
+        candidate = parse_version(manifest_version(manifest)) if manifest else None
+        if candidate is None:
+            candidate = parse_version(first or FIRST_VERSION)
+        if candidate is None:
+            raise SystemExit(
+                f"version: {manifest} declares no usable version and "
+                f"--first {first or FIRST_VERSION!r} is not X.Y.Z"
+            )
     taken = taken or set()
     while candidate in taken:
         candidate = (candidate[0], candidate[1], candidate[2] + 1)
@@ -160,8 +173,11 @@ def main(argv=None) -> int:
 
     p_next = sub.add_parser("next", help="print the next release version")
     p_next.add_argument("--repo", default=REPO_ROOT, help="repository to read tags from")
-    p_next.add_argument("--first", default=FIRST_VERSION,
-                        help=f"version to start at when there are no tags (default {FIRST_VERSION})")
+    p_next.add_argument("--manifest", default=DEFAULT_MANIFEST,
+                        help="manifest whose version is the first release when there are no tags")
+    p_next.add_argument("--first", default=None,
+                        help=f"fallback when there are no tags and the manifest declares no "
+                             f"usable version (default {FIRST_VERSION})")
 
     p_cur = sub.add_parser("current", help="print the manifest version")
     p_cur.add_argument("--manifest", default=DEFAULT_MANIFEST)
@@ -175,7 +191,7 @@ def main(argv=None) -> int:
     args = ap.parse_args(argv)
 
     if args.cmd == "next":
-        print(next_version(args.repo, args.first))
+        print(next_version(args.repo, args.first, args.manifest))
         return 0
     if args.cmd == "current":
         print(manifest_version(args.manifest))

@@ -67,10 +67,11 @@ python3 build/pipeline.py \
   --commit "$COMMIT" --commit-date "$COMMIT_DATE"
 
 echo "==> [2/6] extended library (Halakhah, Mishneh Torah, Musar, Siddur, commentaries, and all available Talmud)"
+rm -rf dist/full-data
 python3 build/pipeline.py \
   --export-root "$EXPORT_ROOT" \
   --out dist/extended-pack --reports dist/extended-reports \
-  --no-plugin-scripts --no-fidelity --stages "$ALL_STAGES" --policy open \
+  --plugin-data dist/full-data --no-fidelity --stages "$ALL_STAGES" --policy open \
   --commit "$COMMIT" --commit-date "$COMMIT_DATE"
 
 echo "==> [3/6] create range-readable extended .otzenpack"
@@ -86,11 +87,11 @@ else
   echo "==> [5/6] test suite (skipped)"
 fi
 
-echo "==> [6/6] plugin archives (full, and lite = compact library only)"
-python3 build/pack_plugin.py --edition full --out dist/otsaplugin.otzplugin
+echo "==> [6/6] plugin archives (full = compact + extended built in, and lite = compact library only)"
+python3 build/pack_plugin.py --edition full --data-dir dist/full-data --out dist/otsaplugin.otzplugin
 python3 build/pack_plugin.py --edition lite --out dist/otsaplugin-lite.otzplugin
 
 echo
 echo "Done. Install dist/otsaplugin.otzplugin in Otzaria (or dist/otsaplugin-lite.otzplugin for the compact-only Lite build)."
-echo "Then choose Settings > Translation data > Load an extended .otzenpack library"
-echo "and select dist/otsaplugin-extended.otzenpack for the full library."
+echo "The full plugin already contains the extended library. dist/otsaplugin-extended.otzenpack"
+echo "is still written for users who import a library from Settings."

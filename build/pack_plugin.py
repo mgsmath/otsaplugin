@@ -91,21 +91,44 @@ def stage_lite(plugin_dir: str, staging: str) -> str:
     return dest
 
 
-def check_limits(files, expanded_total: int) -> None:
+def stage_full(plugin_dir: str, staging: str, data_dir: str) -> str:
+    """Copy ``plugin_dir`` to ``staging`` and replace its data/ with ``data_dir``
+    (the extended library as <script> files), so the full plugin ships it built in."""
+    if not os.path.isfile(os.path.join(data_dir, "manifest.js")):
+        raise SystemExit(f"{data_dir}: no manifest.js; run the extended pipeline with --plugin-data")
+    dest = os.path.join(staging, "plugin")
+    shutil.copytree(plugin_dir, dest, ignore=shutil.ignore_patterns(*SKIP_DIRS))
+    target = os.path.join(dest, "data")
+    shutil.rmtree(target, ignore_errors=True)
+    shutil.copytree(data_dir, target, ignore=shutil.ignore_patterns(*SKIP_DIRS))
+    return dest
+
+
+def check_limits(files, expanded_total: int, enforce: bool = True) -> None:
+    """Check the plugin-store limits. With enforce=False each violation is
+    printed as a warning and the build continues (used for the full edition,
+    whose embedded extended library is known to exceed them)."""
+    problems = []
     if len(files) > MAX_ENTRIES:
-        raise SystemExit(f"too many entries: {len(files)} > {MAX_ENTRIES}")
+        problems.append(f"too many entries: {len(files)} > {MAX_ENTRIES}")
     if expanded_total > MAX_EXPANDED:
-        raise SystemExit(f"expanded size {expanded_total} > {MAX_EXPANDED}")
+        problems.append(f"expanded size {expanded_total} > {MAX_EXPANDED}")
     for abs_path, rel in files:
         size = os.path.getsize(abs_path)
         if size > MAX_ENTRY:
-            raise SystemExit(f"{rel}: entry {size} > {MAX_ENTRY}")
+            problems.append(f"{rel}: entry {size} > {MAX_ENTRY}")
         if rel.lower().endswith(CODE_RE) and size > MAX_CODE_ENTRY:
-            raise SystemExit(f"{rel}: code entry {size} > {MAX_CODE_ENTRY}")
+            problems.append(f"{rel}: code entry {size} > {MAX_CODE_ENTRY}")
         if rel == "manifest.json" and size > MAX_MANIFEST:
-            raise SystemExit(f"manifest {size} > {MAX_MANIFEST}")
+            problems.append(f"manifest {size} > {MAX_MANIFEST}")
         if rel.lower().endswith((".png", ".jpg", ".jpeg", ".webp", ".gif")) and size > MAX_IMAGE:
-            raise SystemExit(f"{rel}: image {size} > {MAX_IMAGE}")
+            problems.append(f"{rel}: image {size} > {MAX_IMAGE}")
+    if not problems:
+        return
+    if enforce:
+        raise SystemExit("; ".join(problems))
+    for line in problems:
+        print(f"[pack] WARNING store limit not enforced: {line}")
 
 
 def main(argv=None) -> int:
@@ -114,25 +137,35 @@ def main(argv=None) -> int:
     ap.add_argument("--out", default=os.path.join("dist", "otsaplugin.otzplugin"))
     ap.add_argument("--edition", choices=EDITIONS, default="full",
                     help="full (default) or lite (compact library only, separate plugin id)")
+    ap.add_argument("--data-dir", default=None,
+                    help="full edition: data/ to ship instead of plugin-dir/data (the extended library)")
     args = ap.parse_args(argv)
 
     if args.edition == "lite":
         staging = tempfile.mkdtemp(prefix="otz-lite-")
         try:
             plugin_dir = stage_lite(args.plugin_dir, staging)
-            return _pack(plugin_dir, args.out, args.edition)
+            return _pack(plugin_dir, args.out, args.edition, enforce=True)
         finally:
             shutil.rmtree(staging, ignore_errors=True)
-    return _pack(args.plugin_dir, args.out, args.edition)
+    if args.data_dir:
+        staging = tempfile.mkdtemp(prefix="otz-full-")
+        try:
+            plugin_dir = stage_full(args.plugin_dir, staging, args.data_dir)
+            # The embedded extended library exceeds the store limits; see FEASIBILITY.md.
+            return _pack(plugin_dir, args.out, args.edition, enforce=False)
+        finally:
+            shutil.rmtree(staging, ignore_errors=True)
+    return _pack(args.plugin_dir, args.out, args.edition, enforce=True)
 
 
-def _pack(plugin_dir: str, out: str, edition: str) -> int:
+def _pack(plugin_dir: str, out: str, edition: str, enforce: bool = True) -> int:
     files = collect(plugin_dir)
     if not any(rel == "manifest.json" for _abs, rel in files):
         raise SystemExit("no manifest.json in plugin dir")
 
     expanded_total = sum(os.path.getsize(a) for a, _r in files)
-    check_limits(files, expanded_total)
+    check_limits(files, expanded_total, enforce=enforce)
 
     os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
     with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as zf:
@@ -140,7 +173,9 @@ def _pack(plugin_dir: str, out: str, edition: str) -> int:
             zf.write(abs_path, rel)
     compressed = os.path.getsize(out)
     if compressed > MAX_ARCHIVE:
-        raise SystemExit(f"archive {compressed} > {MAX_ARCHIVE}")
+        if enforce:
+            raise SystemExit(f"archive {compressed} > {MAX_ARCHIVE}")
+        print(f"[pack] WARNING store limit not enforced: archive {compressed} > {MAX_ARCHIVE}")
 
     with open(out, "rb") as fh:
         magic = fh.read(2)

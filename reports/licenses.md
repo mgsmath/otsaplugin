@@ -1,6 +1,6 @@
 # Source versions in the shipped pack
 
-Policy: `open` · Sefaria-Export commit `3f1013631fdfe452e953a93a2c5f921319e394ed` · built 2026-10-08T17:45:34Z
+Policy: `open` · Sefaria-Export commit `3f1013631fdfe452e953a93a2c5f921319e394ed` · built 2026-10-08T18:24:04Z
 
 | Version | Licence | Family | Segments | Books | Source |
 |---|---|---|---|---|---|

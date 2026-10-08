@@ -50,7 +50,7 @@ jobs:
       PR_URL: ${{ github.event.pull_request.html_url }}
     steps:
       - name: Check out the merged main
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ github.event_name == 'pull_request_target' && 'main' || github.ref_name }}
           # Tags are the version counter, so the history has to be complete.
@@ -61,14 +61,14 @@ jobs:
         run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: '3.12'
 
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
-          node-version: '20'
+          node-version: '24'
 
       - name: Work out the next version
         id: version
@@ -100,7 +100,7 @@ jobs:
       # restored checkout against the pinned tree, so a partial cache is
       # repaired rather than trusted.
       - name: Cache the Sefaria export
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ref/Sefaria-Export-Archive
           key: sefaria-export-${{ hashFiles('build/sefaria-export.pin', 'build/fetch_export.sh') }}

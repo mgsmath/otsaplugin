@@ -11,6 +11,7 @@
 'use strict';
 
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const vm = require('vm');
 const cp = require('child_process');
@@ -998,6 +999,70 @@ async function main() {
     const chunk = await e.NS.Data.book('Test');
     eq(chunk.book, 'Test');
     eq(chunk.units[0].e[0], 'A test.');
+  });
+
+  // ---- Export fetch audit (build/fetch_export.sh) -------------------------
+  group('Export fetch audit (build/fetch_export.sh)');
+  await test('the audit accepts a checkout whose file names are not ASCII', () => {
+    // Run the audit the release job runs: the Python heredoc inside
+    // build/fetch_export.sh, extracted from the shipped file rather than copied
+    // here, so the test cannot drift away from the thing it guards.
+    const script = fs.readFileSync(path.join(ROOT, 'build', 'fetch_export.sh'), 'utf8');
+    const heredoc = /python3 - "\$\{ROOTS\[@\]\}" <<'PY'\n([\s\S]*?)\nPY\n/.exec(script);
+    assert(heredoc, 'found the audit heredoc in build/fetch_export.sh');
+
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'otsaplugin-audit-'));
+    const runAudit = (commit) => {
+      const file = path.join(dir, 'audit-under-test.py');
+      fs.writeFileSync(file, heredoc[1]);
+      return cp.spawnSync('python3', [file, 'json/Musar'], {
+        cwd: ROOT,
+        encoding: 'utf8',
+        env: Object.assign({}, process.env, { DEST: dir, COMMIT: commit, QUIET: '' }),
+      });
+    };
+    try {
+      // Sefaria ships translations named in German, Catalan, Romanian and
+      // Hebrew — 301 of them at the pinned commit. git C-quotes any such path
+      // in ls-files output unless it is read with -z, and a quoted path is not
+      // a path: os.path.exists() answers False for a file that is on disk. The
+      // audit then declared a complete checkout incomplete and the release job
+      // died at "Fetch the Sefaria export" having built nothing.
+      const work = 'json/Musar/Acharonim/Mesillat Yesharim';
+      const named = work + '/English/Torat Chaim — חיים.json';
+      fs.mkdirSync(path.join(dir, path.dirname(named)), { recursive: true });
+      fs.mkdirSync(path.join(dir, work, 'Hebrew'), { recursive: true });
+      fs.writeFileSync(path.join(dir, named), '{"_comment": []}');
+      fs.writeFileSync(path.join(dir, work, 'Hebrew', 'merged.json'), '{"_comment": []}');
+
+      const git = (...args) =>
+        cp.execFileSync('git', ['-C', dir].concat(args), { encoding: 'utf8' });
+      git('init', '--quiet');
+      git('config', 'user.email', 'audit@example.invalid');
+      git('config', 'user.name', 'audit fixture');
+      git('add', '-A');
+      git('commit', '--quiet', '--message', 'fixture');
+      const commit = git('rev-parse', 'HEAD').trim();
+
+      // Sanity: without -z git really does quote this path, so the fixture
+      // exercises the case rather than passing by accident.
+      const quoted = git('ls-files', '--', ':(glob)json/Musar/**/English/*.json');
+      assert(quoted.indexOf('\\3') >= 0 || quoted.indexOf('"') >= 0, 'git quotes the name: ' + quoted);
+
+      const ok = runAudit(commit);
+      eq(ok.status, 0, 'a complete checkout passes — ' + ok.stdout + ok.stderr);
+      assert(ok.stdout.indexOf('1/1') >= 0, ok.stdout);
+      assert(ok.stdout.indexOf('complete') >= 0, ok.stdout);
+
+      // And it still catches a genuine hole, which is the whole reason the
+      // release job audits a restored cache instead of trusting it.
+      fs.rmSync(path.join(dir, named));
+      const hole = runAudit(commit);
+      eq(hole.status, 1, 'a missing file is still reported');
+      assert(/missing/i.test(hole.stderr), hole.stderr);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   // ---- Summary ------------------------------------------------------------

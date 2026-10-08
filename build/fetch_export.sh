@@ -111,12 +111,20 @@ def say(msg):
 
 
 def tracked(pattern):
-    """Every path in the pinned tree matching a gitignore-style pathspec."""
+    """Every path in the pinned tree matching a gitignore-style pathspec.
+
+    Read with -z, not by lines. git C-quotes any path holding a non-ASCII byte
+    unless core.quotePath is off, and the export is full of them — German,
+    Catalan, Romanian and Hebrew translation file names, 301 of them at the
+    pinned commit. A quoted path is not a path: os.path.exists() answers False
+    for a file that is on disk, and the audit then rejects a checkout that is
+    in fact complete. NUL-separated output is never quoted.
+    """
     out = subprocess.run(
-        ["git", "-C", dest, "ls-files", "--", ":(glob)" + pattern],
-        capture_output=True, text=True, check=True,
-    ).stdout
-    return [line for line in out.splitlines() if line.strip()]
+        ["git", "-C", dest, "ls-files", "-z", "--", ":(glob)" + pattern],
+        capture_output=True, check=True,
+    ).stdout.decode("utf-8", "surrogateescape")
+    return [path for path in out.split("\0") if path]
 
 
 missing_total = 0
@@ -161,6 +169,18 @@ print(f"[fetch]   total: {total}")
 PY
 }
 
+# Clone through a scratch directory. git cleans up after a clone that fails on
+# its own, but not after one that is killed, and a retry pointed at the
+# leftovers dies instantly with "destination path already exists and is not an
+# empty directory" — which would spend the whole retry budget in a second.
+clone_blobless() {
+  local tmp="$DEST.clone-tmp"
+  rm -rf "$tmp"
+  git clone --filter=blob:none --no-checkout "$REPO" "$tmp" || { rm -rf "$tmp"; return 1; }
+  rm -rf "$DEST"
+  mv "$tmp" "$DEST"
+}
+
 head_matches() {
   [ -d "$DEST/.git" ] || return 1
   local head
@@ -182,7 +202,7 @@ log "  roots  ${ROOTS[*]}"
 
 if [ ! -d "$DEST/.git" ]; then
   mkdir -p "$(dirname "$DEST")"
-  retry "clone (blobless)" git clone --filter=blob:none --no-checkout "$REPO" "$DEST"
+  retry "clone (blobless)" clone_blobless
 fi
 
 # Resilience for the on-demand blob fetches: a big post buffer, and a hard floor

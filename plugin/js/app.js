@@ -4,9 +4,13 @@
  * keeps the open English pages. Nothing here loads anything from the network.
  *
  * Pages: the panel can hold several English pages at once, each with its own
- * text, reference, view and split state. Only the active page is on screen; a
- * page keeps its loaded data, so switching back to it redraws without a fetch.
- * Follow reader updates the active page only, so any other page stays put.
+ * text, reference and view. Only the active page is on screen; a page keeps its
+ * loaded data, so switching back to it redraws without a fetch. Follow reader
+ * updates the active page only, so any other page stays put.
+ *
+ * Split view is Otzaria's own: a new page can open beside the reader in a
+ * built-in split (the reader on the left, this English page on the right). Such a
+ * page starts on English only, because the reader already shows the Hebrew.
  */
 (function () {
   'use strict';
@@ -80,7 +84,7 @@
       var req = readerLocation(payload);
       req.selection = payload.selectedText || payload.selection || '';
       req.entry = 'selection';
-      openPage('selection', req);
+      openPage('selection', req, !!NS.settings.splitNewPages);
     });
 
     // Follow the reader: the active page is kept in step with the current
@@ -129,13 +133,28 @@
     if (ref && typeof ref === 'object') ref = ref.ref || ref.reference || ref.title || '';
     var sectionIndex = data.sectionIndex;
     if (sectionIndex === undefined || sectionIndex === null) sectionIndex = data.index;
+    // The context-menu payload carries the book's uid inside its selection.
+    var selection = data.selection && typeof data.selection === 'object' ? data.selection : {};
+    var bookUid = data.bookUid || selection.bookUid || '';
     return {
       bookTitle: String(book || bookId || ''),
       bookId: bookId ? String(bookId) : '',
+      bookUid: bookUid ? String(bookUid) : '',
       ref: ref ? String(ref) : '',
       sectionIndex: sectionIndex,
+      // The line of the text (0-based) that Otzaria opens, kept apart from
+      // sectionIndex, which the Hebrew lookup uses with its own meaning.
+      lineIndex: lineIndexOf(data),
       selection: data.selectedText || data.selection || '',
     };
+  }
+
+  /** The reader's line index (0-based) from a location payload, or null. */
+  function lineIndexOf(data) {
+    var n = data.currentIndex;
+    if (n === undefined || n === null) n = data.index;
+    n = Number(n);
+    return isFinite(n) && n >= 0 && Math.floor(n) === n ? n : null;
   }
 
   // ---- pages --------------------------------------------------------------
@@ -155,20 +174,19 @@
     return !!page && page.id === state.activeId;
   }
 
-  /** The view a page opens with when it is not in split view. */
+  /** The view a page opens with when it is not beside the reader. */
   function defaultView(entry) {
     var per = (NS.settings.viewForContext || {})[entry];
     return per && NS.Views[per] ? per : 'sidebyside';
   }
 
   function createPage(entry) {
-    var split = !!NS.settings.splitNewPages;
     var page = {
       id: state.nextId++,
       entry: entry || 'reader',
-      split: split,
-      // Split pages open on English only: the reader is already on the left.
-      view: split ? 'english' : defaultView(entry || 'reader'),
+      // True while Otzaria's built-in split holds the reader beside this page.
+      beside: false,
+      view: defaultView(entry || 'reader'),
       req: null,
       label: NS.t('עמוד חדש'),
       book: null,
@@ -199,18 +217,29 @@
     return page;
   }
 
-  /** Open a new page for a location (or an empty page when there is none). */
-  function openPage(entry, req) {
+  /**
+   * Open a new page for a location (or an empty page when there is none). With
+   * `beside`, Otzaria's split view puts the reader beside the page.
+   */
+  function openPage(entry, req, beside) {
     var page = createPage(entry);
+    var hasText = !!req && !!(req.bookTitle || req.bookId);
+    var target = beside && hasText ? besideTarget(req) : null;
+    if (target) {
+      page.beside = true;
+      page.view = 'english'; // the reader on the left already shows the Hebrew
+    }
     activatePage(page);
-    if (!req || (!req.bookTitle && !req.bookId)) {
+    if (!hasText) {
       setScreen(page, function () {
         NS.setStatus(NS.t('אין ספר פתוח בקורא. פתח ספר בקורא, או בחר „תרגום לאנגלית” בתפריט הקטע.'), 'info');
       });
       return Promise.resolve(null);
     }
     req.entry = entry;
-    return loadPage(page, req);
+    var loaded = loadPage(page, req);
+    if (target) placeBeside(page, target);
+    return loaded;
   }
 
   /** Load a location into a page, and show that page if it is the active one. */
@@ -292,14 +321,9 @@
 
   // ---- scrolling ----------------------------------------------------------
 
-  /** The elements that scroll for the current page: each split pane, or the content. */
+  /** The element that scrolls for the current page: the content area. */
   function scrollers() {
-    var out = [];
-    var host = NS.renderHost();
-    var panes = host ? host.querySelectorAll('.split-pane') : [];
-    for (var i = 0; i < panes.length; i++) out.push(panes[i]);
-    if (!out.length) out.push(document.getElementById('app-content'));
-    return out;
+    return [document.getElementById('app-content')];
   }
 
   function readScrolls() {
@@ -591,8 +615,7 @@
       NS.setStatus(NS.t('תצוגה לא מוכרת') + ': ' + view, 'error');
       return false;
     }
-    if (page.split) NS.Views.split(ctx);
-    else renderer(ctx);
+    renderer(ctx);
     NS.setStatus('', '');
 
     var focused = false;
@@ -604,7 +627,7 @@
     return focused;
   }
 
-  // ---- view and split -----------------------------------------------------
+  // ---- view ---------------------------------------------------------------
 
   App.currentView = function () {
     var page = activePage();
@@ -616,8 +639,8 @@
     var page = activePage();
     if (!page) return;
     page.view = view;
-    if (!page.split) {
-      // The remembered view is for pages that are not in split view.
+    if (!page.beside) {
+      // The remembered view is for pages that are not beside the reader.
       NS.settings.viewForContext = NS.settings.viewForContext || {};
       NS.settings.viewForContext[page.entry] = view;
       NS.saveSettings();
@@ -626,19 +649,146 @@
     repaintActive();
   };
 
+  // ---- the reader beside a new page (Otzaria's split view) ----------------
+
   /**
-   * Split view for the active page: the reader's Hebrew on the left, the English
-   * on the right. Turning it on opens the English on "English only"; turning it
-   * off goes back to the page's ordinary view.
+   * Where a new page's text is, for Otzaria to open beside the page. Otzaria
+   * finds a text by its uid when there is one, because a title alone can name
+   * two texts.
    */
-  App.toggleSplit = function () {
-    var page = activePage();
-    if (!page) return;
-    page.split = !page.split;
-    page.view = page.split ? 'english' : defaultView(page.entry);
-    applySettingsToChrome();
-    repaintActive();
+  function besideTarget(req) {
+    return {
+      bookUid: req.bookUid || '',
+      title: String(req.bookTitle || req.bookId || ''),
+      lineIndex: typeof req.lineIndex === 'number' ? req.lineIndex : null,
+    };
+  }
+
+  /**
+   * Put the reader beside a new page. A page the reader cannot sit beside keeps
+   * an ordinary view, and a notice says why.
+   */
+  function placeBeside(page, target) {
+    App.openBesideReader(target).then(function (outcome) {
+      if (outcome === 'opened' || outcome === 'reused') return;
+      if (!pageById(page.id)) return; // closed in the meantime
+      page.beside = false;
+      if (page.view === 'english') page.view = defaultView(page.entry);
+      if (outcome === 'other-text') {
+        NS.flashNotice(NS.t('הקורא לצד התרגום מציג ספר אחר, ולכן העמוד נפתח בלי קורא.'), 'info');
+      } else {
+        NS.flashNotice(NS.t('לא ניתן לפתוח את הספר לצד התרגום.'), 'warn');
+      }
+      applySettingsToChrome();
+      if (isActive(page)) repaintActive();
+    });
+  }
+
+  /**
+   * Otzaria's own split view for a new page: the reader on the left, the page on
+   * the right. A plugin tab can hold one reader pane beside it at a time, so:
+   *   - no reader beside the plugin yet: the text opens in a new split, at the line;
+   *   - a reader beside it already on the same text: that pane moves to the line;
+   *   - a reader beside it on another text: nothing is added.
+   * Resolves to 'opened', 'reused', 'other-text' or 'failed'.
+   */
+  App.openBesideReader = function (target) {
+    if (!window.Otzaria) return Promise.resolve('failed');
+    return readerState()
+      .then(function (st) {
+        if (st && readerIsBeside(st)) {
+          if (!isSameText(target, st)) return 'other-text';
+          return target.lineIndex === null ? 'reused' : scrollReader(target.lineIndex);
+        }
+        return openReaderBeside(target);
+      })
+      ['catch'](function (err) {
+        NS.log('split view failed', err && err.code);
+        return 'failed';
+      });
   };
+
+  /** The reader's state, or null when Otzaria does not say. */
+  function readerState() {
+    return window.Otzaria
+      .call('reader.getCurrentState')
+      .then(function (res) {
+        return NS.unwrap(res, 'reader.getCurrentState') || null;
+      })
+      ['catch'](function () {
+        return null;
+      });
+  }
+
+  /**
+   * True when the reader pane sits beside this plugin's tab. Otzaria does not
+   * report layouts, so this reads the open tabs. A split appears as one entry,
+   * showing either its plugin pane or its reader pane. So the reader counts as
+   * beside the plugin unless the plugin and the reader's own tab are both listed.
+   */
+  function readerIsBeside(st) {
+    if (!st.currentBook) return false;
+    var pluginListed = false;
+    var readerListed = false;
+    var tabs = st.openTabs || [];
+    for (var i = 0; i < tabs.length; i++) {
+      var tab = tabs[i];
+      if (!tab) continue;
+      if (tab.isSelf) pluginListed = true;
+      else if (isReaderTab(tab, st)) readerListed = true;
+    }
+    return !pluginListed || !readerListed;
+  }
+
+  /**
+   * True when a listed tab is the reader's own tab: the same text, at the same
+   * line. The same text can also be open in a split, so the line tells them apart.
+   */
+  function isReaderTab(tab, st) {
+    var sameText = st.bookUid ? tab.bookUid === st.bookUid : tab.book === st.currentBook;
+    if (!sameText) return false;
+    if (typeof tab.index !== 'number' || typeof st.currentIndex !== 'number') return true;
+    return tab.index === st.currentIndex;
+  }
+
+  function isSameText(target, st) {
+    if (target.bookUid && st.bookUid) return target.bookUid === st.bookUid;
+    return !!target.title && target.title === st.currentBook;
+  }
+
+  /**
+   * Move the reader pane beside the plugin to a line of the same text. The pane
+   * is already there, so a scroll that does not land is logged, not reverted.
+   */
+  function scrollReader(lineIndex) {
+    return window.Otzaria
+      .call('reader.scrollToSection', { sectionIndex: lineIndex })
+      .then(
+        function () {
+          return 'reused';
+        },
+        function (err) {
+          NS.log('scrollToSection failed', err && err.code);
+          return 'reused';
+        }
+      );
+  }
+
+  /** Open the text as a split pane beside the plugin tab, at the line. */
+  function openReaderBeside(target) {
+    var args = {
+      openInSidePane: true,
+      navigateToPositionIfReused: true,
+      index: target.lineIndex === null ? 0 : target.lineIndex,
+    };
+    if (target.bookUid) args.bookUid = target.bookUid;
+    else args.bookId = target.title;
+    return window.Otzaria
+      .call('reader.openBook', args)
+      .then(function (res) {
+        return NS.unwrap(res, 'reader.openBook') === true ? 'opened' : 'failed';
+      });
+  }
 
   App.toggleFollow = function () {
     NS.settings.follow = !NS.settings.follow;
@@ -652,15 +802,6 @@
   function bindChrome() {
     var tabs = document.getElementById('view-tabs');
     if (tabs) {
-      var split = el('button', 'view-tab split-toggle', NS.t('פיצול'));
-      split.setAttribute('id', 'btn-split');
-      split.type = 'button';
-      split.title = NS.t('הקורא משמאל והאנגלית מימין');
-      split.addEventListener('click', App.toggleSplit);
-      tabs.appendChild(split);
-      var sep = el('span', 'tab-sep');
-      sep.setAttribute('aria-hidden', 'true');
-      tabs.appendChild(sep);
       for (var i = 0; i < NS.Views.LIST.length; i++) {
         (function (view) {
           var b = el('button', 'view-tab', NS.Views.label(view));
@@ -791,31 +932,26 @@
     bar.appendChild(add);
   }
 
+  /** A new page at the reader's place, beside the reader when the setting is on. */
   function newPageFromReader() {
     if (!window.Otzaria) return openPage('reader', null);
+    var beside = !!NS.settings.splitNewPages;
     return window.Otzaria
       .call('reader.getCurrentRef')
       .then(function (res) {
         var data = NS.unwrap(res, 'reader.getCurrentRef');
-        return openPage('reader', readerLocation(data || {}));
+        return openPage('reader', readerLocation(data || {}), beside);
       })['catch'](function () {
         return openPage('reader', null);
       });
   }
 
   function applySettingsToChrome() {
-    var page = activePage();
     var view = App.currentView();
     for (var i = 0; i < viewButtons.length; i++) {
       var isCurrent = viewButtons[i].dataset.view === view;
       viewButtons[i].classList.toggle('active', isCurrent);
       viewButtons[i].setAttribute('aria-pressed', isCurrent ? 'true' : 'false');
-    }
-    var split = document.getElementById('btn-split');
-    if (split) {
-      var isSplit = !!(page && page.split);
-      split.classList.toggle('active', isSplit);
-      split.setAttribute('aria-pressed', isSplit ? 'true' : 'false');
     }
     var follow = document.getElementById('btn-follow');
     if (follow) {
@@ -823,8 +959,6 @@
       follow.setAttribute('aria-pressed', NS.settings.follow ? 'true' : 'false');
       follow.textContent = NS.settings.follow ? NS.t('עוקב אחרי הקורא: פעיל') : NS.t('עקוב אחרי הקורא');
     }
-    var content = document.getElementById('app-content');
-    if (content) content.classList.toggle('split-mode', !!(page && page.split));
     setChecked('opt-numbers', NS.settings.numbers);
     setChecked('opt-split-default', NS.settings.splitNewPages);
     setValue('opt-order', NS.settings.order);

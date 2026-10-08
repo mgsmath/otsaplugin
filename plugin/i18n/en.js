@@ -61,10 +61,11 @@
     'שגיאה בטעינה': 'Loading error',
     'תכולת החבילה': 'Available texts',
     'תצוגה לא מוכרת': 'Unknown view',
-    'הקורא משמאל והאנגלית מימין': 'Reader on the left, English on the right',
-    'פיצול': 'Split',
     'סגור עמוד': 'Close page',
     'עמוד חדש': 'New page',
     'פתח עמוד חדש במיקום הנוכחי של הקורא': 'Open a new page at the reader’s current location',
+    'הקורא לצד התרגום מציג ספר אחר, ולכן העמוד נפתח בלי קורא.':
+      'The reader beside the plugin shows another text, so this page opened without a reader.',
+    'לא ניתן לפתוח את הספר לצד התרגום.': 'This text could not be opened beside the English page.',
   };
 })();

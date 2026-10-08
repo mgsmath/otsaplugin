@@ -21,8 +21,9 @@ workspace.
   12-digit footer. The runtime importer successfully reads a generated fixture
   `.otzenpack`, loads its manifest, then loads a work chunk.
 - **Reader/UI behavior:** tests cover the English/LTR interface under a Hebrew
-  host locale; several pages with their own content; split view (reader left,
-  English right) and its default; Reader and Follow reader; drag-to-scroll bars
+  host locale; several pages with their own content; Otzaria's built-in split for
+  new pages (reader left, English right), its Settings option and its reuse rule,
+  with the plugin's own split removed; Reader and Follow reader; drag-to-scroll bars
   without scroll bars; the Lite edition's manifest and packaging; passage-by-passage
   pairing in the side-by-side layout; context-menu translation of a selected
   passage; Follow reader with multiple SDK payload spellings; and silent Hebrew
@@ -44,8 +45,9 @@ workspace.
   build are not available. Run the build and validator before release; the
   validator must report zero errors and zero warnings.
 - Live UI behaviour on Otzaria Windows, Android, macOS or iOS WebViews; actual
-  SDK payloads in a running app; and host-app CombinedTab split placement require
-  a real app/device.
+  SDK payloads in a running app; and the split pane's placement inside Otzaria
+  (`reader.openBook` with `openInSidePane`, Otzaria 0.9.97 or later) require a real
+  app/device. The split tests use mocked SDK responses.
 
 The data builder filters by English language and redistribution metadata. The
 library can cover only translations present in the pinned export and cleared by

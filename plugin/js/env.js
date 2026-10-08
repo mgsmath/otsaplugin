@@ -154,7 +154,7 @@
     view: null, // last used view; null = per-entry-point default
     viewForContext: null, // { selection: 'sidebyside', reader: 'interleaved' }
     follow: false,
-    splitNewPages: true, // new pages open in split view: reader on the left, English on the right
+    splitNewPages: true, // new pages open beside the reader in Otzaria's split view: reader on the left, English on the right
     order: 'hebrew-first', // side-by-side order: 'hebrew-first' (Hebrew left) | 'english-first'
     numbers: true,
     density: 'comfortable', // 'compact' | 'comfortable'

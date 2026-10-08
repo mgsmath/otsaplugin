@@ -9,15 +9,17 @@ regardless of Otzaria's language setting; Hebrew source text remains right-to-le
 - Five reading layouts: English only, **side by side**, interleaved, flowing,
   and Tap to reveal. Side by side pairs passage with passage: verse 10's English
   is a row with verse 10's Hebrew, all the way down the chapter or daf.
-- **Several English pages.** Each page has its own text, reference, view and
-  split state, shown as a tab. **+ New page** opens the reader's current location
-  on a new page. With **Follow reader** off, every page stays where it was.
-- **Split view** (the **Split** toggle in the view bar, and the default for new
-  pages — see Settings) shows the reader's Hebrew on the left and the English on
-  the right. The English side starts on **English only**.
+- **Several English pages.** Each page has its own text, reference and view,
+  shown as a tab. **+ New page** opens the reader's current location on a new
+  page. With **Follow reader** off, every page stays where it was.
+- **Split view.** With **Open new pages in split view** on in Settings (the
+  default), a new page opens in Otzaria's own split view: the reader on the left,
+  the English on the right. The English side starts on **English only**. The
+  page that opens when the plugin starts is not split. See the split view note.
 - The reader context-menu action **Translate selected passage** opens the passage
-  on a new page. It shows the whole chapter or daf, scrolled to and outlined,
-  rather than a cut-down window of nearby passages.
+  on a new page, split beside the reader when the Settings option is on. It shows
+  the whole chapter or daf, scrolled to and outlined, rather than a cut-down
+  window of nearby passages.
 - **Follow reader** keeps the active page in step with the reader's current
   reference. **Reader** opens the page's text in the reader at its reference.
 - The top bar, page tabs and view bar have no scroll bar: when they do not fit,
@@ -103,15 +105,27 @@ extended `.otzenpack`, both report sets and their checksums; the release body is
 read back out of the build that produced it. **Actions → Release → Run
 workflow** cuts one by hand. Details: [docs/RELEASES.md](docs/RELEASES.md).
 
-## Split-pane note
+## Split view note
 
-**Split** lays the page out as two panes: the reader's Hebrew on the left and the
-English on the right, each scrolling on its own. The side-by-side view is still
-one row per passage, Hebrew on one side and English on the other. Otzaria's separate
-`CombinedTab` split-pane layout is controlled
-by the host app's tab menu; the plugin SDK currently does not expose a method to
-create that host-level split automatically. The Settings panel gives the exact
-host-menu action.
+Split view uses Otzaria's own split pane: the plugin calls `reader.openBook` with
+`openInSidePane`, which needs Otzaria 0.9.97 or later (the manifest's
+`minAppVersion`). The plugin has no split view of its own; the five layouts are
+the same beside the reader as anywhere else.
+
+- The reader beside a new page is a reader tab for that text. A reader tab for the
+  same text that is already open elsewhere stays where it is, so the text can
+  appear twice.
+- A reader already beside the plugin is reused when it shows the same text: its
+  pane moves to the passage. When it shows a different text, the new page opens
+  without a reader, and the page says why.
+- Otzaria shows one reader pane beside the plugin tab, and the plugin cannot read
+  the layout directly. It works the layout out from the open tabs and their lines,
+  so a split the user made in another tab, or a separate tab on the same text at the
+  same line, can be mistaken for the plugin's reader.
+- If Otzaria refuses the split, the page falls back to its ordinary view and a
+  warning says so.
+- The page that opens when the plugin starts is never split. Otzaria opens a split
+  beside the current tab only, and the plugin may start out of view.
 
 ## Project layout
 

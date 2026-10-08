@@ -12,7 +12,25 @@ Create a codespace for this branch or reopen the repository in a Dev Container.
 The build reads a local checkout of
 [Sefaria-Export-Archive](https://github.com/Sefaria/Sefaria-Export-Archive); it does
 not download text at runtime. The expanded library scans all English-bearing work
-directories under Tanakh, Mishnah, Talmud, Halakhah and Musar. Fetch those roots:
+directories under Tanakh, Mishnah, Talmud, Halakhah and Musar. One script fetches
+the pinned commit, retries the parts that depend on the network, and reports what
+landed:
+
+```sh
+build/fetch_export.sh          # -> ref/Sefaria-Export-Archive
+```
+
+It reads the roots from `build/scope.py`, so widening the build widens the fetch
+with it, and it pulls only the two kinds of file `build/pipeline.py` opens —
+every `<work>/English/*.json` and each work's `Hebrew/merged.json`. Measured
+against the pinned commit that is **2.3 GB / ~9,900 files**, where checking out
+all five roots is **4.7 GB / ~16,300 files**; the difference is Hebrew
+per-version files, Targum and other languages the pipeline never reads, so the
+libraries are identical either way. It finishes by auditing the checkout against
+the pinned tree, which is also why it is safe to re-run and safe to restore from
+a CI cache.
+
+The equivalent by hand, if you want everything under those roots:
 
 ```sh
 git clone --filter=blob:none --no-checkout \
@@ -23,7 +41,9 @@ git -C ref/Sefaria-Export-Archive sparse-checkout set \
 git -C ref/Sefaria-Export-Archive checkout 3f1013631fdfe452e953a93a2c5f921319e394ed
 ```
 
-`ref/` is gitignored and never enters the repository history.
+The pinned commit lives in `build/sefaria-export.pin`, shared by
+`build/fetch_export.sh` and `build/build_all.sh`. `ref/` is gitignored and never
+enters the repository history.
 
 ## 3. Build, test and pack
 
@@ -74,17 +94,29 @@ the plugin displays a neutral “no translation available” message. The pipeli
 keeps the required source metadata internally and does not expose a credits or
 licence browser in the reader UI.
 
-## 4. Validate (optional)
+## 4. Validate
 
-Use the official [Otzaria plugin validator](https://github.com/Otzaria/otzaria-plugin-validator)
-against the packed plugin. Zero errors and zero warnings are required before
-shipping.
+The official [Otzaria plugin validator](https://github.com/Otzaria/otzaria-plugin-validator)
+is dependency-free. Zero errors and zero warnings are required before shipping,
+and the release workflow refuses to publish a pack that fails it:
+
+```sh
+git clone --depth 1 https://github.com/Otzaria/otzaria-plugin-validator.git /tmp/otzaria-plugin-validator
+node /tmp/otzaria-plugin-validator/src/cli.js plugin --fail-on-warnings
+```
+
+It enforces the store's limits as well as the code — among them that the plugin
+`name` is at most 14 characters and identical to `contributes.toolTab.title`.
 
 ## 5. Download the plugin
 
 Download `dist/otsaplugin.otzplugin` from the Codespaces Explorer and install it in
 Otzaria (Settings → Plugins → install from file). The extended `.otzenpack` can be
 selected later from the plugin's Settings panel.
+
+Both files are attached to every
+[release](https://github.com/mgsmath/otsaplugin/releases), so a codespace build is
+only needed when you are changing the build itself — see [RELEASES.md](RELEASES.md).
 
 ## Notes
 

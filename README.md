@@ -52,21 +52,43 @@ maintainers.
 > [docs/CODESPACES.md](docs/CODESPACES.md).
 
 ```sh
+# Fetch the pinned Sefaria export into ref/ — blobless and sparse, ~2.3 GB of
+# the ~4.7 GB the five roots hold, because it pulls only the files the pipeline
+# opens (every English/ version and each work's Hebrew/merged.json).
+build/fetch_export.sh
+
 # Build compact and expanded libraries, run tests, and package the plugin.
 ./build/build_all.sh
 
 # Or run the data pipeline directly for any supported subset.
-python3 build/pipeline.py --export-root /path/to/Sefaria-Export-Archive \
+python3 build/pipeline.py --export-root ref/Sefaria-Export-Archive \
   --out dist/extended-pack --no-plugin-scripts \
   --stages tanakh,mishnah,talmud,halakhah,musar --policy open
 python3 build/make_otzenpack.py \
   --pack-dir dist/extended-pack --out dist/otsaplugin-extended.otzenpack
 
 # Tests use the generated plugin data when present and a small in-memory pack otherwise.
-node tests/run_tests.js --export-root /path/to/Sefaria-Export-Archive
+node tests/run_tests.js --export-root ref/Sefaria-Export-Archive
 ```
 
 Generated `plugin/data/`, `dist/`, and the local export checkout are gitignored.
+
+## Releases
+
+Merging a pull request into `main` builds both libraries and publishes a
+[GitHub release](https://github.com/mgsmath/otsaplugin/releases) with them.
+Version numbers come from the repository's tags: the first release keeps the
+version `plugin/manifest.json` already declares, and every release after that
+bumps the patch component by one (`v1.1.0`, `v1.1.1`, … `v1.1.9`, `v1.1.10`).
+The chosen number is stamped into the manifest and that one-line bump is
+committed back to `main`, so the repository always shows the released version.
+
+Nothing is published unless the build succeeded **and** the official Otzaria
+plugin validator passes with `--fail-on-warnings` — a merge that breaks either
+costs a failed job, not a broken release. Assets are the `.otzplugin`, the
+extended `.otzenpack`, both report sets and their checksums; the release body is
+read back out of the build that produced it. **Actions → Release → Run
+workflow** cuts one by hand. Details: [docs/RELEASES.md](docs/RELEASES.md).
 
 ## Split-pane note
 
@@ -79,9 +101,11 @@ host-menu action.
 ## Project layout
 
 ```text
-build/    Sefaria export pipeline, recursive category discovery, pack writers
+.github/  the release workflow: merged PR -> build -> validator -> release
+build/    Sefaria export pipeline, recursive category discovery, pack writers,
+          export fetch, versioning and release notes
 plugin/   the Otzaria plugin UI, runtime, styles and manifest
- tests/   Node VM test harness and Python bridge
+tests/    Node VM test harness and Python bridge
 reports/  generated coverage, merge and source-policy reports
-docs/     mapping, build and redistribution notes
+docs/     mapping, build, redistribution and release notes
 ```

@@ -24,9 +24,10 @@ STAGE_GLOBS: Dict[str, List[str]] = {
     "talmud": ["json/Talmud"],  # Bavli, Yerushalmi, and any included commentaries
     "halakhah": ["json/Halakhah"],  # Mishneh Torah, Shulchan Arukh, Mishnah Berurah, etc.
     "musar": ["json/Musar"],
+    "siddur": ["json/Liturgy/Siddur"],  # Siddur Ashkenaz, Sefard, Edot HaMizrach, Chabad weekday
 }
 
-STAGE_ORDER = ["tanakh", "mishnah", "talmud", "halakhah", "musar"]
+STAGE_ORDER = ["tanakh", "mishnah", "talmud", "halakhah", "musar", "siddur"]
 
 # Schema class drives how the runtime formats an address and how it parses an
 # Otzaria ref. Derived from Sefaria's own ``sectionNames``; see

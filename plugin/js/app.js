@@ -1,7 +1,12 @@
 /* otsaplugin — application controller.
  *
- * Wires the two entry points, resolves an Otzaria location to a pack unit, and
- * drives the view renderers. Nothing here loads anything from the network.
+ * Wires the entry points, resolves an Otzaria location to a pack unit, and
+ * keeps the open English pages. Nothing here loads anything from the network.
+ *
+ * Pages: the panel can hold several English pages at once, each with its own
+ * text, reference, view and split state. Only the active page is on screen; a
+ * page keeps its loaded data, so switching back to it redraws without a fetch.
+ * Follow reader updates the active page only, so any other page stays put.
  */
 (function () {
   'use strict';
@@ -10,24 +15,26 @@
   var Ref = NS.Ref;
   var App = (NS.App = {});
 
-  // Context-menu item ids declared in manifest.json.
+  // Context-menu item id declared in manifest.json.
   var MENU_TRANSLATE_ID = 'english-translation';
-  var MENU_SPLIT_ID = 'english-translation-split';
+
+  // The view-bar buttons, one per view, kept so the active one can be marked.
+  var viewButtons = [];
 
   var state = {
     manifest: null,
-    bookKey: null,
-    book: null,
-    chunk: null,
-    view: null,
-    entry: 'reader', // 'selection' | 'reader'
-    lastRef: null,
-    lastBookId: null,
-    lastTitle: null,
-    lastUnitAddress: null,
+    pages: [], // open pages, in tab order
+    activeId: null, // id of the page on screen
+    nextId: 1,
     treePromise: null,
-    renderToken: 0,
   };
+
+  function el(tag, cls, text) {
+    var node = document.createElement(tag);
+    if (cls) node.className = cls;
+    if (text !== undefined && text !== null) node.appendChild(document.createTextNode(text));
+    return node;
+  }
 
   // ---- boot ---------------------------------------------------------------
 
@@ -54,78 +61,63 @@
         .then(function (manifest) {
           state.manifest = manifest;
           NS.setPackInfo(manifest);
-          return openDefault();
+          // Pages opened before the data arrived are loaded now; with none, show
+          // the reader's location.
+          return reloadPages().then(function () {
+            if (!state.pages.some(function (page) { return !!page.req; })) return openDefault();
+          });
         })['catch'](function (err) {
           NS.setStatus(NS.t('טעינת הנתונים נכשלה') + ': ' + (err && err.message), 'error');
         });
     });
 
-    // The two declarative context-menu actions are delivered after boot without
-    // needing a background instance. Both translate the selected passage in the
-    // panel — the whole section, scrolled to that passage, never a window
-    // around it; the second one always shows both languages at once.
+    // The context-menu action opens the selected passage on a new page: the
+    // whole section it belongs to, scrolled to and outlined, never a window of
+    // nearby passages.
     window.Otzaria.on('reader.context_menu_item_clicked', function (payload) {
       payload = payload || {};
-      var itemId = payload.itemId;
-      if (itemId && itemId !== MENU_TRANSLATE_ID && itemId !== MENU_SPLIT_ID) return;
-      var split = payload.param === 'split' || itemId === MENU_SPLIT_ID;
-      state.entry = 'selection';
-      // The split action pins the view; the plain one opens in whatever this
-      // entry point last used.
-      state.view = split ? 'sidebyside' : null;
+      if (payload.itemId && payload.itemId !== MENU_TRANSLATE_ID) return;
       var req = readerLocation(payload);
       req.selection = payload.selectedText || payload.selection || '';
       req.entry = 'selection';
-      App.show(req);
+      openPage('selection', req);
     });
 
-    window.Otzaria.on('plugin.page_opened', function (payload) {
-      payload = payload || {};
-      var param = payload.param || {};
-      if (param.entry === 'selection' || param.entry === 'reader') state.entry = param.entry;
-      if (param.view && NS.Views[param.view]) state.view = param.view;
-    });
-
-    // Entry point B: follow the reader. The location normalizer accepts both
-    // current and older SDK payload spellings, so missing optional fields do not
-    // break updates.
+    // Follow the reader: the active page is kept in step with the current
+    // reference. The location normalizer accepts both current and older SDK
+    // payload spellings, so missing optional fields do not break updates.
     window.Otzaria.on('reader.current_ref_changed', function (payload) {
       if (!NS.settings.follow) return;
       var req = readerLocation(payload || {});
       if (!req.bookTitle && !req.bookId && !req.ref) return;
-      state.entry = 'reader';
-      state.view = null;
       req.entry = 'reader';
-      App.show(req);
+      showInPage(ensureActivePage('reader'), req);
     });
   };
 
-  function openDefault(viewOverride) {
-    // Read the location on demand instead of relying on the last event; this
-    // keeps the Translate and Split view buttons useful even when follow is off.
-    state.entry = 'reader';
-    state.view = viewOverride && NS.Views[viewOverride] ? viewOverride : null;
+  /** Read the reader's current location and show it on the active page. */
+  function openDefault() {
+    // Read the location on demand instead of relying on the last event.
     return window.Otzaria
       .call('reader.getCurrentRef')
       .then(function (res) {
         var data = NS.unwrap(res, 'reader.getCurrentRef');
         var req = readerLocation(data || {});
         req.entry = 'reader';
-        if (!req.bookTitle && !req.bookId) {
-          NS.setStatus(
-            NS.t('אין ספר פתוח בקורא. בחר קטע בטקסט ובחר „תרגום לאנגלית” בתפריט, או פתח ספר בקורא.'),
-            'info'
-          );
-          return null;
-        }
-        return App.show(req);
+        if (!req.bookTitle && !req.bookId) return noBook();
+        return showInPage(ensureActivePage('reader'), req);
       })['catch'](function (err) {
-        NS.setStatus(
-          NS.t('אין ספר פתוח בקורא. בחר קטע בטקסט ובחר „תרגום לאנגלית” בתפריט, או פתח ספר בקורא.'),
-          'info'
-        );
         NS.log('getCurrentRef failed', err && err.code);
+        return noBook();
       });
+  }
+
+  function noBook() {
+    if (activePage()) {
+      NS.setStatus(NS.t('אין ספר פתוח בקורא. פתח ספר בקורא, או בחר „תרגום לאנגלית” בתפריט הקטע.'), 'info');
+      return null;
+    }
+    return openPage('reader', null);
   }
 
   function readerLocation(data) {
@@ -144,6 +136,185 @@
       sectionIndex: sectionIndex,
       selection: data.selectedText || data.selection || '',
     };
+  }
+
+  // ---- pages --------------------------------------------------------------
+
+  function activePage() {
+    return pageById(state.activeId);
+  }
+
+  function pageById(id) {
+    for (var i = 0; i < state.pages.length; i++) {
+      if (state.pages[i].id === id) return state.pages[i];
+    }
+    return null;
+  }
+
+  function isActive(page) {
+    return !!page && page.id === state.activeId;
+  }
+
+  /** The view a page opens with when it is not in split view. */
+  function defaultView(entry) {
+    var per = (NS.settings.viewForContext || {})[entry];
+    return per && NS.Views[per] ? per : 'sidebyside';
+  }
+
+  function createPage(entry) {
+    var split = !!NS.settings.splitNewPages;
+    var page = {
+      id: state.nextId++,
+      entry: entry || 'reader',
+      split: split,
+      // Split pages open on English only: the reader is already on the left.
+      view: split ? 'english' : defaultView(entry || 'reader'),
+      req: null,
+      label: NS.t('עמוד חדש'),
+      book: null,
+      bookKey: null,
+      chunk: null,
+      unit: null,
+      parsed: null,
+      focus: null,
+      focusNext: false,
+      hebrew: null,
+      lastRef: null,
+      lastBookId: null,
+      lastTitle: null,
+      paint: null, // function(): draws the page into the render host
+      token: 0,
+      scrolls: null,
+    };
+    state.pages.push(page);
+    return page;
+  }
+
+  /** The active page, creating and opening an empty one when there is none. */
+  function ensureActivePage(entry) {
+    var page = activePage();
+    if (page) return page;
+    page = createPage(entry);
+    activatePage(page);
+    return page;
+  }
+
+  /** Open a new page for a location (or an empty page when there is none). */
+  function openPage(entry, req) {
+    var page = createPage(entry);
+    activatePage(page);
+    if (!req || (!req.bookTitle && !req.bookId)) {
+      setScreen(page, function () {
+        NS.setStatus(NS.t('אין ספר פתוח בקורא. פתח ספר בקורא, או בחר „תרגום לאנגלית” בתפריט הקטע.'), 'info');
+      });
+      return Promise.resolve(null);
+    }
+    req.entry = entry;
+    return loadPage(page, req);
+  }
+
+  /** Load a location into a page, and show that page if it is the active one. */
+  function showInPage(page, req) {
+    page.entry = req.entry || page.entry;
+    if (!isActive(page)) activatePage(page);
+    return loadPage(page, req);
+  }
+
+  /** Make a page the one on screen. The scroll position of the old page is kept. */
+  function activatePage(page) {
+    var prev = activePage();
+    if (prev && prev !== page) prev.scrolls = readScrolls();
+    state.activeId = page ? page.id : null;
+    renderTabs();
+    applySettingsToChrome();
+    if (!page) {
+      NS.renderHost().textContent = '';
+      NS.setHeader('', '');
+      NS.setStatus(NS.t('אין עמוד פתוח. לחץ על „עמוד חדש” או פתח ספר בקורא.'), 'info');
+      return;
+    }
+    repaint(page, page.scrolls);
+  }
+
+  /** Clear the render host and draw the page. Restores scroll unless the page focused a passage. */
+  function repaint(page, scrolls) {
+    NS.setStatus('', '');
+    NS.renderHost().textContent = '';
+    var focused = false;
+    if (page.paint) {
+      focused = !!page.paint();
+    } else {
+      NS.setStatus(NS.t('הנתונים עדיין נטענים…'), 'info');
+    }
+    if (!focused && scrolls) restoreScrolls(scrolls);
+    renderTabs();
+    applySettingsToChrome();
+  }
+
+  /** Draw a page that has nothing but a message to show. */
+  function setScreen(page, draw) {
+    page.paint = function () {
+      draw();
+      return false;
+    };
+    if (isActive(page)) repaint(page, null);
+  }
+
+  function closePage(id) {
+    var idx = -1;
+    for (var i = 0; i < state.pages.length; i++) {
+      if (state.pages[i].id === id) idx = i;
+    }
+    if (idx < 0) return;
+    var wasActive = state.activeId === id;
+    state.pages.splice(idx, 1);
+    if (!wasActive) {
+      renderTabs();
+      return;
+    }
+    var next = state.pages[idx] || state.pages[idx - 1] || null;
+    activatePage(next);
+  }
+
+  /** Re-load every open page from its last request (after the data changes). */
+  function reloadPages() {
+    return state.pages.slice().reduce(function (chain, page) {
+      return chain.then(function () {
+        return page.req ? loadPage(page, page.req) : null;
+      });
+    }, Promise.resolve());
+  }
+
+  function repaintActive() {
+    var page = activePage();
+    if (page && page.unit) repaint(page, readScrolls());
+  }
+
+  // ---- scrolling ----------------------------------------------------------
+
+  /** The elements that scroll for the current page: each split pane, or the content. */
+  function scrollers() {
+    var out = [];
+    var host = NS.renderHost();
+    var panes = host ? host.querySelectorAll('.split-pane') : [];
+    for (var i = 0; i < panes.length; i++) out.push(panes[i]);
+    if (!out.length) out.push(document.getElementById('app-content'));
+    return out;
+  }
+
+  function readScrolls() {
+    var list = scrollers();
+    var values = [];
+    for (var i = 0; i < list.length; i++) values.push(list[i] ? list[i].scrollTop : 0);
+    return { count: list.length, values: values };
+  }
+
+  function restoreScrolls(saved) {
+    var list = scrollers();
+    if (!saved || saved.count !== list.length) return;
+    for (var i = 0; i < list.length; i++) {
+      if (list[i]) list[i].scrollTop = saved.values[i] || 0;
+    }
   }
 
   // ---- book resolution ----------------------------------------------------
@@ -206,65 +377,86 @@
     });
   };
 
-  // ---- rendering ----------------------------------------------------------
+  // ---- loading and rendering ----------------------------------------------
 
-  App.show = function (req) {
-    var token = ++state.renderToken;
+  /** Resolve a request and load its section into the page. Newest request wins. */
+  function loadPage(page, req) {
     req = req || {};
-    if (!state.manifest) {
-      NS.setStatus(NS.t('הנתונים עדיין נטענים…'), 'info');
-      return Promise.resolve();
-    }
     if (!req.bookTitle && req.bookId) {
       // Otzaria uses the Hebrew title as the bookId for library text books.
       req.bookTitle = String(req.bookId);
     }
+    page.req = req;
+    page.entry = req.entry || page.entry;
+    page.label = req.bookTitle || page.label;
+    var token = (page.token = (page.token || 0) + 1);
+    renderTabs();
+    if (!state.manifest) {
+      // Data is still loading; boot loads every page that has a request.
+      if (isActive(page)) NS.setStatus(NS.t('הנתונים עדיין נטענים…'), 'info');
+      return Promise.resolve();
+    }
 
     return App.treeHintFor(req.bookTitle)
       .then(function (hint) {
+        if (token !== page.token) return null;
         var resolved = App.resolveWork(req.bookTitle, hint);
         if (resolved.error === 'no-title') {
-          NS.setStatus(NS.t('לא התקבל שם ספר מהקורא.'), 'warn');
+          setScreen(page, function () {
+            NS.setStatus(NS.t('לא התקבל שם ספר מהקורא.'), 'warn');
+          });
           return null;
         }
         if (resolved.error === 'not-in-pack') {
-          NS.showNoEnglish(req.bookTitle);
+          setScreen(page, function () {
+            NS.showNoEnglish(req.bookTitle);
+          });
           return null;
         }
         if (resolved.ambiguous) {
-          NS.showAmbiguous(resolved.ambiguous, req);
+          setScreen(page, function () {
+            NS.showAmbiguous(resolved.ambiguous, req, function () {
+              loadPage(page, req);
+            });
+          });
           return null;
         }
-        return renderWork(resolved.work, req, hint, token);
-      })['catch'](function (err) {
+        return renderWork(page, resolved.work, req, token);
+      })
+      ['catch'](function (err) {
         NS.log('render failed', err);
-        NS.setStatus(NS.t('שגיאה בטעינה') + ': ' + (err && err.message), 'error');
+        if (token !== page.token) return;
+        setScreen(page, function () {
+          NS.setStatus(NS.t('שגיאה בטעינה') + ': ' + (err && err.message), 'error');
+        });
       });
-  };
+  }
 
-  function renderWork(workKey, req, hint, token) {
-    var manifest = state.manifest;
-    var book = manifest.books[workKey];
-    state.bookKey = workKey;
-    state.book = book;
+  function renderWork(page, workKey, req, token) {
+    var book = state.manifest.books[workKey];
+    page.bookKey = workKey;
+    page.book = book;
     // Remembered so a view switch re-renders the same place and so "open in
     // reader" knows where to send the user.
-    state.lastRef = req.ref || null;
-    state.lastBookId = req.bookId || book.he;
-    state.lastTitle = req.bookTitle || book.he;
+    page.lastRef = req.ref || null;
+    page.lastBookId = req.bookId || book.he;
+    page.lastTitle = req.bookTitle || book.he;
 
     return NS.Data.book(book.chunk).then(function (chunk) {
-      if (token !== state.renderToken) return null; // a newer request superseded us
-      state.chunk = chunk;
+      if (token !== page.token) return null; // a newer request superseded us
 
       var parsed = Ref.parse(req.ref, book.schema);
       if (parsed.chapter === null) {
-        NS.showRefNotParsed(req, book);
+        setScreen(page, function () {
+          NS.showRefNotParsed(req, book);
+        });
         return null;
       }
       var unit = Ref.unitFor(chunk, parsed);
       if (!unit) {
-        NS.showUnitMissing(book, parsed, req);
+        setScreen(page, function () {
+          NS.showUnitMissing(book, parsed, req);
+        });
         return null;
       }
 
@@ -286,7 +478,7 @@
       if (focus === null && req.selection) {
         var located = Ref.locateSegment(unit, req.selection);
         if (located && located.index >= 0) focus = located.index;
-        else if (state.entry === 'selection') {
+        else if (page.entry === 'selection') {
           // If the selection cannot be mapped safely, the whole unit is shown
           // and nothing is highlighted rather than the wrong passage marked.
           NS.flashNotice(NS.t('הקטע שנבחר לא זוהה בוודאות — מוצג הקטע כולו'));
@@ -294,8 +486,29 @@
       }
 
       return hebrewForUnit(book, unit, req, parsed).then(function (hebrew) {
-        if (token !== state.renderToken) return null;
-        draw(book, unit, parsed, focus, hebrew, req);
+        if (token !== page.token) return null;
+        page.chunk = chunk;
+        page.parsed = parsed;
+        page.unit = unit;
+        page.focus = focus;
+        page.focusNext = true;
+        page.hebrew = hebrew;
+        page.label = book.he + (page.lastRef ? ' · ' + page.lastRef : '');
+        page.paint = function () {
+          return drawPage(page);
+        };
+        if (book.missing > 0) {
+          var missingInUnit = 0;
+          for (var i = 0; i < unit.e.length; i++) if (!unit.e[i]) missingInUnit++;
+          if (missingInUnit > 0) {
+            NS.flashNotice(
+              NS.t('חלק מהשורות ללא תרגום') + ' (' + missingInUnit + '/' + unit.e.length + ')',
+              'info'
+            );
+          }
+        }
+        if (isActive(page)) repaint(page, null);
+        else renderTabs();
         return unit;
       });
     });
@@ -341,27 +554,24 @@
       });
   }
 
-  function draw(book, unit, parsed, focus, hebrew, req) {
-    var view = App.currentView();
-    // Every view renders the whole unit — the chapter or daf the reader is on —
-    // and the passage the reader came from is scrolled to and outlined. A view
-    // showing only a few passages around the selection lost the reader the
-    // thread of the chapter, so there is no windowed view any more.
+  /** Draw a page that has a loaded unit. Returns true when it scrolled to a passage. */
+  function drawPage(page) {
+    var view = page.view;
+    var unit = page.unit;
     var n = unit.e.length;
-    var from = 0;
-    var to = n;
 
     var segmentGroups = unit.g ? NS.expandRuns(unit.g, n, -1) : null;
-    var ctxObj = {
+    var ctx = {
       host: NS.renderHost(),
-      book: book,
-      chunk: state.chunk,
+      book: page.book,
+      chunk: page.chunk,
       unit: unit,
-      from: from,
-      to: to,
-      focus: focus,
+      from: 0,
+      to: n,
+      focus: page.focus,
       segmentGroups: segmentGroups,
-      hebrew: hebrew.text,
+      hebrew: page.hebrew.text,
+      view: view,
       options: {
         numbers: NS.settings.numbers,
         order: NS.settings.order,
@@ -372,63 +582,62 @@
       },
     };
 
-    NS.renderHost().textContent = '';
-    state.lastUnitAddress = unit.a[0];
-    NS.setHeader(NS.Views.unitLabel(book, unit), book.he + ' · ' + (req.ref || ''));
-
-    if (book.missing > 0) {
-      var missingInUnit = 0;
-      for (var i = 0; i < n; i++) if (!unit.e[i]) missingInUnit++;
-      if (missingInUnit > 0) {
-        NS.flashNotice(
-          NS.t('חלק מהשורות ללא תרגום') + ' (' + missingInUnit + '/' + n + ')',
-          'info'
-        );
-      }
-    }
+    // Every view renders the whole unit — the chapter or daf the reader is on —
+    // and the passage the reader came from is scrolled to and outlined.
+    NS.setHeader(NS.Views.unitLabel(page.book, unit), page.book.he + ' · ' + (page.lastRef || ''));
 
     var renderer = NS.Views[view];
     if (typeof renderer !== 'function') {
       NS.setStatus(NS.t('תצוגה לא מוכרת') + ': ' + view, 'error');
-      return;
+      return false;
     }
-    renderer(ctxObj);
+    if (page.split) NS.Views.split(ctx);
+    else renderer(ctx);
     NS.setStatus('', '');
 
-    if (focus !== null) NS.scrollToSegment(focus);
-
-    // Remember the view per entry point.
-    NS.settings.viewForContext = NS.settings.viewForContext || {};
-    NS.settings.viewForContext[state.entry] = view;
-    NS.saveSettings();
+    var focused = false;
+    if (page.focusNext && page.focus !== null) {
+      NS.scrollToSegment(page.focus);
+      focused = true;
+    }
+    page.focusNext = false;
+    return focused;
   }
 
-  // ---- view switching -----------------------------------------------------
+  // ---- view and split -----------------------------------------------------
 
   App.currentView = function () {
-    if (state.view && NS.Views[state.view]) return state.view;
-    var perEntry = (NS.settings.viewForContext || {})[state.entry];
-    if (perEntry && NS.Views[perEntry]) return perEntry;
-    return 'sidebyside';
+    var page = activePage();
+    return page && NS.Views[page.view] ? page.view : 'sidebyside';
   };
 
   App.setView = function (view) {
     if (!NS.Views[view]) return;
-    state.view = view;
-    NS.settings.viewForContext = NS.settings.viewForContext || {};
-    NS.settings.viewForContext[state.entry] = view;
-    NS.saveSettings();
-    applySettingsToChrome();
-    if (state.chunk && state.book) {
-      App.show({
-        // Keep the reader's actual id so opening the source text works even
-        // when Otzaria uses an id different from the displayed title.
-        bookTitle: state.lastTitle || state.book.he,
-        bookId: state.lastBookId || state.book.he,
-        ref: state.lastRef,
-        entry: state.entry,
-      });
+    var page = activePage();
+    if (!page) return;
+    page.view = view;
+    if (!page.split) {
+      // The remembered view is for pages that are not in split view.
+      NS.settings.viewForContext = NS.settings.viewForContext || {};
+      NS.settings.viewForContext[page.entry] = view;
+      NS.saveSettings();
     }
+    applySettingsToChrome();
+    repaintActive();
+  };
+
+  /**
+   * Split view for the active page: the reader's Hebrew on the left, the English
+   * on the right. Turning it on opens the English on "English only"; turning it
+   * off goes back to the page's ordinary view.
+   */
+  App.toggleSplit = function () {
+    var page = activePage();
+    if (!page) return;
+    page.split = !page.split;
+    page.view = page.split ? 'english' : defaultView(page.entry);
+    applySettingsToChrome();
+    repaintActive();
   };
 
   App.toggleFollow = function () {
@@ -438,18 +647,26 @@
     if (NS.settings.follow) openDefault();
   };
 
-  // ---- chrome (top bar, tabs, panels) ------------------------------------
+  // ---- chrome (top bar, page tabs, view bar, settings) --------------------
 
   function bindChrome() {
     var tabs = document.getElementById('view-tabs');
     if (tabs) {
+      var split = el('button', 'view-tab split-toggle', NS.t('פיצול'));
+      split.setAttribute('id', 'btn-split');
+      split.type = 'button';
+      split.title = NS.t('הקורא משמאל והאנגלית מימין');
+      split.addEventListener('click', App.toggleSplit);
+      tabs.appendChild(split);
+      var sep = el('span', 'tab-sep');
+      sep.setAttribute('aria-hidden', 'true');
+      tabs.appendChild(sep);
       for (var i = 0; i < NS.Views.LIST.length; i++) {
         (function (view) {
-          var b = document.createElement('button');
+          var b = el('button', 'view-tab', NS.Views.label(view));
           b.type = 'button';
-          b.className = 'view-tab';
           b.dataset.view = view;
-          b.appendChild(document.createTextNode(NS.Views.label(view)));
+          viewButtons.push(b);
           b.addEventListener('click', function () {
             App.setView(view);
           });
@@ -458,21 +675,16 @@
       }
     }
     on('btn-follow', 'click', App.toggleFollow);
-    on('btn-translate', 'click', function () {
-      openDefault();
-    });
-    on('btn-split', 'click', function () {
-      openDefault('sidebyside');
-    });
     on('btn-options', 'click', function () {
       NS.showPanel(NS.panelOpen === 'options' ? null : 'options');
     });
     on('btn-reader', 'click', function () {
-      if (!state.book) return;
+      var page = activePage();
+      if (!page || !page.book) return;
       window.Otzaria
         .call('reader.openBookAtRef', {
-          bookId: state.lastBookId || state.book.he,
-          ref: state.lastRef || '',
+          bookId: page.lastBookId || page.book.he,
+          ref: page.lastRef || '',
         })
         .then(function (res) {
           return NS.unwrap(res, 'reader.openBookAtRef');
@@ -490,15 +702,19 @@
         NS.showPanel(null);
       });
     }
+    on('opt-split-default', 'change', function (ev) {
+      NS.settings.splitNewPages = ev.target.checked;
+      NS.saveSettings();
+    });
     on('opt-numbers', 'change', function (ev) {
       NS.settings.numbers = ev.target.checked;
       NS.saveSettings();
-      App.setView(App.currentView());
+      repaintActive();
     });
     on('opt-order', 'change', function (ev) {
       NS.settings.order = ev.target.value;
       NS.saveSettings();
-      App.setView(App.currentView());
+      repaintActive();
     });
     on('opt-import', 'click', function () {
       NS.Data.pickAndUsePack()
@@ -506,7 +722,9 @@
           if (!m) return;
           state.manifest = m;
           NS.setPackInfo(m);
-          openDefault();
+          return reloadPages().then(function () {
+            if (!state.pages.some(function (page) { return !!page.req; })) return openDefault();
+          });
         })['catch'](function (err) {
           NS.setStatus(NS.t('טעינת קובץ הנתונים נכשלה') + ': ' + (err && err.message), 'error');
         });
@@ -516,27 +734,88 @@
         .then(function (m) {
           state.manifest = m;
           NS.setPackInfo(m);
-          openDefault();
+          return reloadPages().then(function () {
+            if (!state.pages.some(function (page) { return !!page.req; })) return openDefault();
+          });
         })['catch'](function (err) {
           NS.setStatus(NS.t('טעינת הנתונים נכשלה') + ': ' + (err && err.message), 'error');
         });
     });
+
+    // A short bar that does not fit is dragged rather than scrolled by a bar.
+    NS.dragScroll(document.getElementById('topbar-actions'));
+    NS.dragScroll(document.getElementById('page-tabs'));
+    NS.dragScroll(document.getElementById('view-tabs'));
   }
 
   function on(id, event, fn) {
-    var el = document.getElementById(id);
-    if (el) el.addEventListener(event, fn);
+    var node = document.getElementById(id);
+    if (node) node.addEventListener(event, fn);
+  }
+
+  /** Open page tabs, with the "+ New page" button at the end of the strip. */
+  function renderTabs() {
+    var bar = document.getElementById('page-tabs');
+    if (!bar) return;
+    bar.textContent = '';
+    for (var i = 0; i < state.pages.length; i++) {
+      (function (page) {
+        var active = page.id === state.activeId;
+        var tab = el('div', 'page-tab' + (active ? ' active' : ''));
+        var label = el('button', 'page-tab-label', page.label || '');
+        label.type = 'button';
+        label.title = page.label || '';
+        label.setAttribute('aria-pressed', active ? 'true' : 'false');
+        label.addEventListener('click', function () {
+          if (!isActive(page)) activatePage(page);
+        });
+        var close = el('button', 'page-tab-close', '×');
+        close.type = 'button';
+        close.title = NS.t('סגור עמוד');
+        close.setAttribute('aria-label', NS.t('סגור עמוד'));
+        close.addEventListener('click', function (ev) {
+          if (ev && ev.stopPropagation) ev.stopPropagation();
+          closePage(page.id);
+        });
+        tab.appendChild(label);
+        tab.appendChild(close);
+        bar.appendChild(tab);
+      })(state.pages[i]);
+    }
+    var add = el('button', 'page-tab-new', '+ ' + NS.t('עמוד חדש'));
+    add.type = 'button';
+    add.title = NS.t('פתח עמוד חדש במיקום הנוכחי של הקורא');
+    add.addEventListener('click', function () {
+      newPageFromReader();
+    });
+    bar.appendChild(add);
+  }
+
+  function newPageFromReader() {
+    if (!window.Otzaria) return openPage('reader', null);
+    return window.Otzaria
+      .call('reader.getCurrentRef')
+      .then(function (res) {
+        var data = NS.unwrap(res, 'reader.getCurrentRef');
+        return openPage('reader', readerLocation(data || {}));
+      })['catch'](function () {
+        return openPage('reader', null);
+      });
   }
 
   function applySettingsToChrome() {
+    var page = activePage();
     var view = App.currentView();
-    var tabs = document.getElementById('view-tabs');
-    if (tabs) {
-      var buttons = tabs.querySelectorAll('.view-tab');
-      for (var i = 0; i < buttons.length; i++) {
-        buttons[i].classList.toggle('active', buttons[i].dataset.view === view);
-        buttons[i].setAttribute('aria-pressed', buttons[i].dataset.view === view ? 'true' : 'false');
-      }
+    for (var i = 0; i < viewButtons.length; i++) {
+      var isCurrent = viewButtons[i].dataset.view === view;
+      viewButtons[i].classList.toggle('active', isCurrent);
+      viewButtons[i].setAttribute('aria-pressed', isCurrent ? 'true' : 'false');
+    }
+    var split = document.getElementById('btn-split');
+    if (split) {
+      var isSplit = !!(page && page.split);
+      split.classList.toggle('active', isSplit);
+      split.setAttribute('aria-pressed', isSplit ? 'true' : 'false');
     }
     var follow = document.getElementById('btn-follow');
     if (follow) {
@@ -544,12 +823,10 @@
       follow.setAttribute('aria-pressed', NS.settings.follow ? 'true' : 'false');
       follow.textContent = NS.settings.follow ? NS.t('עוקב אחרי הקורא: פעיל') : NS.t('עקוב אחרי הקורא');
     }
-    var split = document.getElementById('btn-split');
-    if (split) {
-      split.classList.toggle('active', view === 'sidebyside');
-      split.setAttribute('aria-pressed', view === 'sidebyside' ? 'true' : 'false');
-    }
+    var content = document.getElementById('app-content');
+    if (content) content.classList.toggle('split-mode', !!(page && page.split));
     setChecked('opt-numbers', NS.settings.numbers);
+    setChecked('opt-split-default', NS.settings.splitNewPages);
     setValue('opt-order', NS.settings.order);
     var root = document.documentElement;
     root.classList.toggle('density-compact', NS.settings.density === 'compact');
@@ -557,12 +834,12 @@
   }
 
   function setChecked(id, v) {
-    var el = document.getElementById(id);
-    if (el) el.checked = !!v;
+    var node = document.getElementById(id);
+    if (node) node.checked = !!v;
   }
   function setValue(id, v) {
-    var el = document.getElementById(id);
-    if (el && el.value !== v) el.value = v;
+    var node = document.getElementById(id);
+    if (node && node.value !== v) node.value = v;
   }
 
   // ---- helpers used by other modules -------------------------------------
@@ -572,11 +849,11 @@
   };
 
   NS.setStatus = function (text, kind) {
-    var el = document.getElementById('status');
-    if (!el) return;
-    el.textContent = text || '';
-    el.className = 'status' + (kind ? ' ' + kind : '');
-    el.classList.toggle('hidden', !text);
+    var node = document.getElementById('status');
+    if (!node) return;
+    node.textContent = text || '';
+    node.className = 'status' + (kind ? ' ' + kind : '');
+    node.classList.toggle('hidden', !text);
   };
 
   NS.setHeader = function (title, subtitle) {
@@ -587,9 +864,9 @@
   };
 
   NS.setPackInfo = function (manifest) {
-    var el = document.getElementById('pack-info');
-    if (!el || !manifest) return;
-    el.textContent =
+    var node = document.getElementById('pack-info');
+    if (!node || !manifest) return;
+    node.textContent =
       (NS.Data.mode() === 'imported' ? NS.t('חבילה מיובאת') : NS.t('חבילה מובנית')) +
       ' · ' +
       manifest.stats.books + ' ' + NS.t('ספרים');
@@ -597,15 +874,15 @@
 
   var noticeTimer = null;
   NS.flashNotice = function (text, kind) {
-    var el = document.getElementById('notice');
-    if (!el) return;
+    var node = document.getElementById('notice');
+    if (!node) return;
     var line = document.createElement('div');
     line.className = 'notice ' + (kind || 'info');
     line.appendChild(document.createTextNode(text));
-    el.appendChild(line);
+    node.appendChild(line);
     if (noticeTimer) clearTimeout(noticeTimer);
     noticeTimer = setTimeout(function () {
-      el.textContent = '';
+      node.textContent = '';
     }, 9000);
   };
 
@@ -620,22 +897,91 @@
     if (scrim) scrim.classList.toggle('open', !!which);
   };
 
+  /** Scroll to a passage in every pane that shows it, and outline it there. */
   NS.focusSegment = function (ctx, index) {
-    state.lastUnitAddress = ctx.unit.a[0];
     NS.scrollToSegment(index);
   };
 
   NS.scrollToSegment = function (index) {
     var host = NS.renderHost();
     if (!host) return;
-    var node = host.querySelector('[data-index="' + index + '"]');
-    if (!node) return;
-    if (typeof node.scrollIntoView === 'function') {
-      node.scrollIntoView({ block: 'center', behavior: 'auto' });
-    }
+    var nodes = host.querySelectorAll('[data-index="' + index + '"]');
+    if (!nodes.length) return;
     var marked = host.querySelectorAll('.focused');
     for (var i = 0; i < marked.length; i++) marked[i].classList.remove('focused');
-    node.classList.add('focused');
+    for (var j = 0; j < nodes.length; j++) {
+      if (typeof nodes[j].scrollIntoView === 'function') {
+        nodes[j].scrollIntoView({ block: 'center', behavior: 'auto' });
+      }
+      nodes[j].classList.add('focused');
+    }
+  };
+
+  /**
+   * Drag-to-scroll for a bar that does not fit: press and move the mouse to
+   * pan it. There is no scroll bar. A press that does not move is still a click.
+   * The vertical wheel also pans the bar, so it works without a drag.
+   */
+  NS.dragScroll = function (node) {
+    if (!node) return;
+    var down = false;
+    var moved = false;
+    var startX = 0;
+    var startLeft = 0;
+    var swallowClick = false;
+
+    node.addEventListener('pointerdown', function (ev) {
+      if (ev.button !== undefined && ev.button !== 0) return;
+      down = true;
+      moved = false;
+      startX = ev.clientX;
+      startLeft = node.scrollLeft;
+    });
+    node.addEventListener('pointermove', function (ev) {
+      if (!down) return;
+      var dx = ev.clientX - startX;
+      if (!moved && Math.abs(dx) < 4) return;
+      if (!moved) {
+        moved = true;
+        node.classList.add('dragging');
+      }
+      node.scrollLeft = startLeft - dx;
+      if (ev.preventDefault) ev.preventDefault();
+    });
+    function release() {
+      if (!down) return;
+      down = false;
+      node.classList.remove('dragging');
+      if (moved) {
+        // The click that ends a drag must not also press the button under it.
+        swallowClick = true;
+        setTimeout(function () {
+          swallowClick = false;
+        }, 0);
+      }
+    }
+    node.addEventListener('pointerup', release);
+    node.addEventListener('pointerleave', release);
+    node.addEventListener('pointercancel', release);
+    node.addEventListener(
+      'click',
+      function (ev) {
+        if (!swallowClick) return;
+        swallowClick = false;
+        if (ev.stopPropagation) ev.stopPropagation();
+        if (ev.preventDefault) ev.preventDefault();
+      },
+      true
+    );
+    node.addEventListener(
+      'wheel',
+      function (ev) {
+        if (Math.abs(ev.deltaY) <= Math.abs(ev.deltaX)) return;
+        node.scrollLeft += ev.deltaY;
+        if (ev.preventDefault) ev.preventDefault();
+      },
+      { passive: false }
+    );
   };
 
   // ---- the "we can't be sure" screens ------------------------------------
@@ -668,7 +1014,8 @@
     NS.setStatus('', '');
   };
 
-  NS.showAmbiguous = function (candidates, req) {
+  /** Several texts share the title: ask which one, and reload the page with the choice. */
+  NS.showAmbiguous = function (candidates, req, onPick) {
     var host = NS.renderHost();
     if (!host) return;
     host.textContent = '';
@@ -701,7 +1048,7 @@
         b.appendChild(sub);
         b.addEventListener('click', function () {
           state.manifest.titleIndex[NS.normalizeTitle(req.bookTitle)] = key; // sticky for this session
-          App.show(req);
+          onPick();
         });
         list.appendChild(b);
       })(candidates[i]);

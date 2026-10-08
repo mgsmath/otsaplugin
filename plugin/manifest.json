@@ -3,7 +3,7 @@
   "id": "org.sefaria.otzaria-english",
   "name": "English",
   "version": "1.1.0",
-  "description": "Offline English translations for texts in Otzaria, with reader-follow and side-by-side views.",
+  "description": "Offline English translations for texts in Otzaria, with reader-follow, multiple pages and split reader views.",
   "author": "otsaplugin contributors",
   "homepage": "https://github.com/mgsmath/otsaplugin",
   "entrypoint": "index.html",
@@ -39,14 +39,6 @@
           "icon": "fluent:translate_24_regular",
           "openPlugin": true,
           "param": "selection"
-        },
-        {
-          "id": "english-translation-split",
-          "type": "item",
-          "title": "Translate side by side",
-          "icon": "fluent:panel-left_24_regular",
-          "openPlugin": true,
-          "param": "split"
         }
       ]
     },

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Build the compact plugin library plus a complete, separately importable library.
+# Build the compact plugin library plus a complete, separately importable library,
+# then package the full plugin and the compact-only Lite plugin.
 #
 # Usage:
 #   build/build_all.sh [path-to-Sefaria-Export-Archive] [--no-tests]
@@ -35,7 +36,7 @@ PINNED_COMMIT="$(awk '!/^#/ && NF >= 1 {print $1; exit}' "$PIN_FILE" 2>/dev/null
 PINNED_DATE="$(awk '!/^#/ && NF >= 2 {print $2; exit}' "$PIN_FILE" 2>/dev/null || true)"
 PINNED_COMMIT="${PINNED_COMMIT:-3f1013631fdfe452e953a93a2c5f921319e394ed}"
 PINNED_DATE="${PINNED_DATE:-2026-03-23}"
-ALL_STAGES="tanakh,mishnah,talmud,halakhah,musar"
+ALL_STAGES="tanakh,mishnah,talmud,halakhah,musar,siddur"
 CORE_STAGES="tanakh,mishnah,talmud"
 
 if [ ! -d "$EXPORT_ROOT/json" ]; then
@@ -65,7 +66,7 @@ python3 build/pipeline.py \
   --stages "$CORE_STAGES" --policy open \
   --commit "$COMMIT" --commit-date "$COMMIT_DATE"
 
-echo "==> [2/6] extended library (Halakhah, Mishneh Torah, Musar, commentaries, and all available Talmud)"
+echo "==> [2/6] extended library (Halakhah, Mishneh Torah, Musar, Siddur, commentaries, and all available Talmud)"
 python3 build/pipeline.py \
   --export-root "$EXPORT_ROOT" \
   --out dist/extended-pack --reports dist/extended-reports \
@@ -85,10 +86,11 @@ else
   echo "==> [5/6] test suite (skipped)"
 fi
 
-echo "==> [6/6] plugin archive"
-python3 build/pack_plugin.py
+echo "==> [6/6] plugin archives (full, and lite = compact library only)"
+python3 build/pack_plugin.py --edition full --out dist/otsaplugin.otzplugin
+python3 build/pack_plugin.py --edition lite --out dist/otsaplugin-lite.otzplugin
 
 echo
-echo "Done. Install dist/otsaplugin.otzplugin in Otzaria."
+echo "Done. Install dist/otsaplugin.otzplugin in Otzaria (or dist/otsaplugin-lite.otzplugin for the compact-only Lite build)."
 echo "Then choose Settings > Translation data > Load an extended .otzenpack library"
 echo "and select dist/otsaplugin-extended.otzenpack for the full library."

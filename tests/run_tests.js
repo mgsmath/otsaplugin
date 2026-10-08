@@ -91,7 +91,9 @@ const SCRIPTS = [
   'js/app.js',
 ];
 
-function loadPlugin(sdkHandlers) {
+// opts.fixture: serve the small fixture pack even when plugin/data exists, for
+// assertions that describe fixture content rather than the real library.
+function loadPlugin(sdkHandlers, opts = {}) {
   const fixture = makeFixture();
   const sandbox = {
     window: {},
@@ -134,7 +136,7 @@ function loadPlugin(sdkHandlers) {
     if (child.tagName === 'SCRIPT' && child.src) {
       loadedSrcs.push(child.src);
       const p = path.join(PLUGIN, decodeURIComponent(child.src));
-      if (fs.existsSync(p)) {
+      if (!opts.fixture && fs.existsSync(p)) {
         vm.runInContext(fs.readFileSync(p, 'utf8'), sandbox, { filename: child.src });
         if (typeof child.onload === 'function') child.onload();
       } else if (child.src === 'data/manifest.js') {
@@ -192,6 +194,16 @@ function loadPlugin(sdkHandlers) {
       (listeners[name] || []).forEach((fn) => fn(payload));
     },
   };
+}
+
+/** The stub matches one class at a time, so compound selectors are filtered here. */
+function withClass(nodes, cls) {
+  return nodes.filter((n) => n.classList.contains(cls));
+}
+
+/** The active view-style button (the split toggle is also a view-tab, but has no view). */
+function activeViews(doc) {
+  return withClass(doc.getElementById('view-tabs').querySelectorAll('.view-tab'), 'active').filter((n) => n.dataset.view);
 }
 
 function python(caseName, args) {
@@ -346,13 +358,14 @@ async function main() {
   const manifest = await NS.Data.manifest();
   assert(manifest, 'bundled manifest loaded');
 
+  // Fixture-specific: Mishnah Berurah is not in the compact or extended library.
   await test('the pack resolves Tanakh, Mishnah, and Mishneh Torah title prefixes', () => {
-    eq(Ref.resolveBook(manifest, 'בראשית'), 'Genesis');
-    eq(Ref.resolveBook(manifest, 'Genesis'), 'Genesis');
-    eq(Ref.resolveBook(manifest, 'משנה אבות'), 'Pirkei Avot');
-    eq(Ref.resolveBook(manifest, 'משנה ברורה'), 'Mishnah Berurah');
-    eq(Ref.resolveBook(manifest, 'משנה תורה, הלכות תשובה'), 'Mishneh Torah, Repentance');
-    eq(Ref.resolveBook(manifest, 'רמב״ם הלכות תשובה'), 'Mishneh Torah, Repentance');
+    eq(Ref.resolveBook(fixtureManifest, 'בראשית'), 'Genesis');
+    eq(Ref.resolveBook(fixtureManifest, 'Genesis'), 'Genesis');
+    eq(Ref.resolveBook(fixtureManifest, 'משנה אבות'), 'Pirkei Avot');
+    eq(Ref.resolveBook(fixtureManifest, 'משנה ברורה'), 'Mishnah Berurah');
+    eq(Ref.resolveBook(fixtureManifest, 'משנה תורה, הלכות תשובה'), 'Mishneh Torah, Repentance');
+    eq(Ref.resolveBook(fixtureManifest, 'רמב״ם הלכות תשובה'), 'Mishneh Torah, Repentance');
   });
   await test('the pack reports ברכות as ambiguous instead of guessing', () => {
     const got = Ref.resolveBook(manifest, 'ברכות');
@@ -613,10 +626,11 @@ async function main() {
 
   // ---- Views --------------------------------------------------------------
   group('The five views render loaded pack data');
+  // Split view is the default for new pages; these tests cover the plain views.
   const viewEnv = loadPlugin({
     'reader.getCurrentRef': () => ({ bookId: 'בראשית', ref: 'פרק א, פסוק ג', index: 0 }),
     'reader.getSectionTextMap': () => ({ __error: true, code: 'error.unsupported' }),
-    'storage.get': () => null,
+    'storage.get': () => ({ splitNewPages: false }),
   });
   await boot(viewEnv);
   await new Promise((r) => setTimeout(r, 60));
@@ -771,7 +785,7 @@ async function main() {
       'reader.getSectionTextMap': () => ({ __error: true, code: 'error.unsupported' }),
       'library.getTree': () => null,
       'storage.get': () => null,
-    });
+    }, { fixture: true });
     await boot(e);
     e.emit('reader.context_menu_item_clicked', {
       itemId: 'english-translation',
@@ -782,40 +796,23 @@ async function main() {
     });
     await new Promise((r) => setTimeout(r, 80));
     const host = e.fixture.document.getElementById('render-host');
-    eq(host.querySelectorAll('.sbs-grid').length, 1, 'the paired layout by default');
-    const rows = host
-      .querySelectorAll('.sbs-row')
-      .filter((row) => row.dataset.index !== undefined);
-    eq(rows.length, 4, 'the whole chapter, not a few passages around the selection');
+    eq(host.querySelectorAll('.split-wrap').length, 1, 'a new page opens in split view by default');
+    const english = host.querySelector('.split-en').querySelectorAll('.seg');
+    eq(english.length, 4, 'the whole chapter, not a few passages around the selection');
     const marked = host.querySelectorAll('.focused');
-    eq(marked.length, 1, 'the selected passage is the one marked');
-    eq(marked[0].dataset.index, '3', 'and it is the passage the reader had selected');
+    assert(marked.length > 0, 'the selected passage is marked');
+    assert(marked.every((node) => node.dataset.index === '3'), 'and it is the passage the reader had selected');
   });
-  await test('the split context-menu action opens a side-by-side translation', async () => {
-    const e = loadPlugin({
-      'reader.getCurrentRef': () => null,
-      'reader.getSectionTextMap': () => ({ __error: true, code: 'error.unsupported' }),
-      'storage.get': () => null,
-    });
-    await boot(e);
-    e.emit('reader.context_menu_item_clicked', {
-      itemId: 'english-translation-split',
-      param: 'split',
-      currentBookId: 'בראשית',
-      currentRef: 'פרק א',
-    });
-    await new Promise((r) => setTimeout(r, 80));
-    eq(e.fixture.document.getElementById('render-host').querySelectorAll('.sbs-grid').length, 1);
+  await test('the context menu offers only Translate selected passage', () => {
     const mf = JSON.parse(fs.readFileSync(path.join(PLUGIN, 'manifest.json'), 'utf8'));
     const items = mf.contributes.startup.contextMenuItems;
-    eq(items.length, 2);
-    assert(items.every((item) => !/[א-ת]/.test(item.title)), 'context menu labels are English');
-    // The param strings the manifest declares are exactly the ones app.js reads.
-    const app = fs.readFileSync(path.join(PLUGIN, 'js', 'app.js'), 'utf8');
+    eq(items.length, 1, 'one context-menu item');
+    eq(items[0].id, 'english-translation');
     eq(items[0].param, 'selection');
-    eq(items[1].param, 'split');
-    assert(app.indexOf("payload.param === 'split'") >= 0, 'the split param is handled');
-    assert(!/['"]peek['"]/.test(app), 'no stale peek param left in the controller');
+    assert(items.every((item) => !/[א-ת]/.test(item.title)), 'context menu labels are English');
+    const app = fs.readFileSync(path.join(PLUGIN, 'js', 'app.js'), 'utf8');
+    assert(app.indexOf('english-translation-split') < 0, 'no handler for the removed side-by-side item');
+    assert(app.indexOf("'split'") < 0 && app.indexOf('payload.param') < 0, 'no param-driven split left');
   });
   await test('Follow reader button enables updates from normalized reader events', async () => {
     const e = loadPlugin({
@@ -882,7 +879,7 @@ async function main() {
     assert(!/src\s*=\s*["']https?:/i.test(html), 'no remote script in index.html');
     assert(!/href\s*=\s*["']https?:/i.test(html), 'no remote stylesheet in index.html');
   });
-  await test('Translate, Split view, and Reader buttons use the current location', async () => {
+  await test('the top bar has Reader and Follow reader; Translate and Split view are not there', async () => {
     const e = loadPlugin({
       'reader.getCurrentRef': () => ({ bookId: 'בראשית', ref: 'פרק א, פסוק ג', index: 0 }),
       'reader.getSectionTextMap': () => ({ __error: true, code: 'error.unsupported' }),
@@ -891,23 +888,184 @@ async function main() {
     });
     await boot(e);
     await new Promise((r) => setTimeout(r, 60));
-    const readsBefore = e.calls.filter((call) => call.method === 'reader.getCurrentRef').length;
-    e.fixture.document.getElementById('btn-translate').dispatch('click');
-    await new Promise((r) => setTimeout(r, 60));
-    assert(e.calls.filter((call) => call.method === 'reader.getCurrentRef').length > readsBefore, 'Translate refreshes location');
-
-    e.NS.App.setView('english');
-    await new Promise((r) => setTimeout(r, 60));
-    e.fixture.document.getElementById('btn-split').dispatch('click');
-    await new Promise((r) => setTimeout(r, 80));
-    eq(e.fixture.document.getElementById('render-host').querySelectorAll('.sbs-grid').length, 1);
-    e.fixture.document.getElementById('btn-reader').dispatch('click');
+    const doc = e.fixture.document;
+    assert(!doc.getElementById('btn-translate'), 'no Translate button');
+    const html = fs.readFileSync(path.join(PLUGIN, 'index.html'), 'utf8');
+    const bar = html.slice(html.indexOf('id="topbar-actions"'), html.indexOf('</header>'));
+    const top = [...bar.matchAll(/<button[^>]*id="([^"]+)"/g)].map((m) => m[1]);
+    eq(top.join('|'), 'btn-reader|btn-follow|btn-options', 'top bar: reader, follow, settings');
+    assert(!/btn-translate|Translate the current reader/.test(html), 'no Translate button in the markup');
+    doc.getElementById('btn-reader').dispatch('click');
     await new Promise((r) => setTimeout(r, 20));
     const opened = e.calls.filter((call) => call.method === 'reader.openBookAtRef').pop();
     assert(opened, 'Reader action called');
     eq(opened.payload.ref, 'פרק א, פסוק ג');
     eq(opened.payload.bookId, 'בראשית');
   });
+  await test('split view is a view-bar toggle: reader on the left, English on the right, English only by default', async () => {
+    const e = loadPlugin({
+      'reader.getCurrentRef': () => ({ bookId: 'בראשית', ref: 'פרק א, פסוק ג', index: 0 }),
+      'reader.getSectionTextMap': () => ({ __error: true, code: 'error.unsupported' }),
+      'storage.get': () => null,
+    });
+    await boot(e);
+    await new Promise((r) => setTimeout(r, 60));
+    const doc = e.fixture.document;
+    const host = doc.getElementById('render-host');
+    eq(host.querySelectorAll('.split-wrap').length, 1, 'split by default');
+    const he = host.querySelector('.split-he');
+    const en = host.querySelector('.split-en');
+    assert(he.textContent.indexOf('בראשית ברא') >= 0, 'Hebrew on the left: ' + he.textContent.slice(0, 40));
+    assert(en.textContent.indexOf('In the beginning') >= 0, 'English on the right');
+    assert(he.textContent.indexOf('In the beginning') < 0, 'no English in the Hebrew pane');
+    eq(doc.getElementById('btn-split').classList.contains('active'), true, 'split toggle is on');
+    const active = activeViews(doc);
+    eq(active.length, 1);
+    eq(active[0].dataset.view, 'english', 'the view defaults to English only in split view');
+    eq(host.querySelectorAll('.sbs-grid').length, 0, 'the side-by-side view is not also on');
+
+    doc.getElementById('btn-split').dispatch('click');
+    await new Promise((r) => setTimeout(r, 60));
+    eq(host.querySelectorAll('.split-wrap').length, 0, 'the toggle turns split off');
+    eq(activeViews(doc)[0].dataset.view, 'sidebyside', 'back to the ordinary view');
+    doc.getElementById('btn-split').dispatch('click');
+    await new Promise((r) => setTimeout(r, 60));
+    eq(host.querySelectorAll('.split-wrap').length, 1, 'and on again');
+    eq(activeViews(doc)[0].dataset.view, 'english');
+  });
+  await test('with the Settings option off, a new page opens side by side, not split', async () => {
+    const e = loadPlugin({
+      'reader.getCurrentRef': () => ({ bookId: 'בראשית', ref: 'פרק א, פסוק ג', index: 0 }),
+      'reader.getSectionTextMap': () => ({ __error: true, code: 'error.unsupported' }),
+      'storage.get': () => ({ splitNewPages: false }),
+    });
+    await boot(e);
+    await new Promise((r) => setTimeout(r, 60));
+    const doc = e.fixture.document;
+    eq(doc.getElementById('render-host').querySelectorAll('.split-wrap').length, 0, 'not split');
+    eq(doc.getElementById('render-host').querySelectorAll('.sbs-grid').length, 1, 'side by side');
+    eq(doc.getElementById('opt-split-default').checked, false, 'the Settings checkbox reflects it');
+  });
+  await test('every view also renders inside split view', async () => {
+    const e = loadPlugin({
+      'reader.getCurrentRef': () => ({ bookId: 'בראשית', ref: 'פרק א, פסוק ג', index: 0 }),
+      'reader.getSectionTextMap': () => ({ __error: true, code: 'error.unsupported' }),
+      'storage.get': () => null,
+    });
+    await boot(e);
+    await new Promise((r) => setTimeout(r, 60));
+    for (const view of e.NS.Views.LIST) {
+      e.NS.App.setView(view);
+      await new Promise((r) => setTimeout(r, 40));
+      const host = e.fixture.document.getElementById('render-host');
+      const pane = host.querySelector('.split-en');
+      assert(pane && pane.textContent.length > 20, view + ' fills the English pane');
+      assert(host.querySelector('.split-he').textContent.indexOf('בראשית') >= 0 || host.querySelector('.split-he').textContent.indexOf('ברא') >= 0, view + ' keeps the Hebrew');
+    }
+  });
+
+  await test('several English pages stay open, each with its own text', async () => {
+    let current = { bookId: 'בראשית', ref: 'פרק א, פסוק ג', index: 0 };
+    const e = loadPlugin({
+      'reader.getCurrentRef': () => current,
+      'reader.getSectionTextMap': () => ({ __error: true, code: 'error.unsupported' }),
+      'library.getTree': () => null,
+      'storage.get': () => null,
+    });
+    await boot(e);
+    await new Promise((r) => setTimeout(r, 60));
+    const doc = e.fixture.document;
+    const labels = () => doc.getElementById('page-tabs').querySelectorAll('.page-tab-label').map((b) => b.textContent);
+    eq(labels().length, 1, 'one page to start');
+    assert(labels()[0].indexOf('בראשית') >= 0, labels()[0]);
+
+    current = { bookId: 'שמות', ref: 'פרק ב', index: 0 };
+    doc.getElementById('page-tabs').querySelector('.page-tab-new').dispatch('click');
+    await new Promise((r) => setTimeout(r, 80));
+    eq(labels().length, 2, 'a second page is open');
+    eq(withClass(doc.getElementById('page-tabs').querySelectorAll('.page-tab'), 'active').length, 1);
+    assert(labels()[1].indexOf('שמות') >= 0, 'the second page shows Exodus: ' + labels()[1]);
+    assert(doc.getElementById('bar-subtitle').textContent.indexOf('שמות') >= 0, 'the active page is on screen');
+
+    // Back to the first page: it is still Genesis, and its Hebrew is still there.
+    doc.getElementById('page-tabs').querySelectorAll('.page-tab-label')[0].dispatch('click');
+    await new Promise((r) => setTimeout(r, 40));
+    assert(doc.getElementById('bar-subtitle').textContent.indexOf('בראשית') >= 0, 'first page restored');
+    assert(doc.getElementById('render-host').querySelector('.split-he').textContent.indexOf('בראשית ברא') >= 0, 'its Hebrew restored');
+
+    // Follow reader is off, so a reader move does not touch either page.
+    e.emit('reader.current_ref_changed', { bookId: 'שמות', ref: 'פרק א', bookTitle: 'שמות' });
+    await new Promise((r) => setTimeout(r, 60));
+    assert(labels()[0].indexOf('בראשית') >= 0 && labels()[1].indexOf('שמות') >= 0, 'pages unchanged with follow off');
+
+    // Closing the second page leaves the first.
+    doc.getElementById('page-tabs').querySelectorAll('.page-tab-close')[1].dispatch('click');
+    await new Promise((r) => setTimeout(r, 40));
+    eq(labels().length, 1, 'closed');
+    assert(labels()[0].indexOf('בראשית') >= 0, 'the first page remains');
+  });
+  await test('Follow reader moves only the page on screen', async () => {
+    let current = { bookId: 'בראשית', ref: 'פרק א', index: 0 };
+    const e = loadPlugin({
+      'reader.getCurrentRef': () => current,
+      'reader.getSectionTextMap': () => ({ __error: true, code: 'error.unsupported' }),
+      'library.getTree': () => null,
+      'storage.get': () => null,
+    });
+    await boot(e);
+    await new Promise((r) => setTimeout(r, 60));
+    const doc = e.fixture.document;
+    const labels = () => doc.getElementById('page-tabs').querySelectorAll('.page-tab-label').map((b) => b.textContent);
+
+    current = { bookId: 'שמות', ref: 'פרק א', index: 0 };
+    doc.getElementById('page-tabs').querySelector('.page-tab-new').dispatch('click');
+    await new Promise((r) => setTimeout(r, 80));
+    doc.getElementById('btn-follow').dispatch('click');
+    await new Promise((r) => setTimeout(r, 60));
+    eq(doc.getElementById('btn-follow').textContent, 'Following reader');
+
+    // Show the Genesis page, then let the reader move to Exodus chapter 2.
+    doc.getElementById('page-tabs').querySelectorAll('.page-tab-label')[0].dispatch('click');
+    await new Promise((r) => setTimeout(r, 40));
+    e.emit('reader.current_ref_changed', { bookId: 'שמות', ref: 'פרק ב', bookTitle: 'שמות' });
+    await new Promise((r) => setTimeout(r, 80));
+    assert(labels()[0].indexOf('פרק ב') >= 0, 'the page on screen follows: ' + labels()[0]);
+    assert(labels()[1].indexOf('פרק א') >= 0, 'the other page keeps its place: ' + labels()[1]);
+  });
+
+  await test('the top bar, page tabs and view bar drag instead of showing a scroll bar', async () => {
+    const e = loadPlugin({
+      'reader.getCurrentRef': () => ({ bookId: 'בראשית', ref: 'פרק א', index: 0 }),
+      'reader.getSectionTextMap': () => ({ __error: true, code: 'error.unsupported' }),
+      'storage.get': () => null,
+    });
+    await boot(e);
+    await new Promise((r) => setTimeout(r, 60));
+    const doc = e.fixture.document;
+    const css = fs.readFileSync(path.join(PLUGIN, 'css', 'plugin.css'), 'utf8');
+    assert(/scrollbar-width:\s*none/.test(css.replace(/\s+/g, ' ').replace(/: /g, ':')), 'scrollbars hidden (firefox)');
+    assert(/::-webkit-scrollbar\s*\{\s*display:\s*none/.test(css), 'scrollbars hidden (webkit)');
+    const markup = fs.readFileSync(path.join(PLUGIN, 'index.html'), 'utf8');
+    for (const id of ['topbar-actions', 'page-tabs', 'view-tabs']) {
+      assert(new RegExp('id="' + id + '" ?').test(markup) && new RegExp('class="[^"]*drag-scroll[^"]*"[^>]*id="' + id + '"|id="' + id + '"[^>]*class="[^"]*drag-scroll').test(markup), id + ' is a drag-scroll bar');
+    }
+    const bar = doc.getElementById('view-tabs');
+    bar.scrollLeft = 50;
+    bar.dispatch('pointerdown', { button: 0, clientX: 200, preventDefault() {} });
+    bar.dispatch('pointermove', { clientX: 160, preventDefault() {} });
+    eq(bar.scrollLeft, 90, 'dragging left pans the bar right');
+    assert(bar.classList.contains('dragging'), 'marked as dragging');
+    bar.dispatch('pointerup', {});
+    assert(!bar.classList.contains('dragging'), 'released');
+    bar.dispatch('wheel', { deltaY: 30, deltaX: 0, preventDefault() {} });
+    eq(bar.scrollLeft, 120, 'the wheel pans it too');
+    bar.scrollLeft = 10;
+    bar.dispatch('pointerdown', { button: 0, clientX: 100, preventDefault() {} });
+    bar.dispatch('pointermove', { clientX: 102, preventDefault() {} });
+    bar.dispatch('pointerup', {});
+    eq(bar.scrollLeft, 10, 'a press without movement does not pan');
+  });
+
   await test('boot forces every plugin control to English and left-to-right', async () => {
     const e = loadPlugin({
       'reader.getCurrentRef': () => ({ bookId: 'בראשית', ref: 'פרק א', index: 0 }),
@@ -982,7 +1140,7 @@ async function main() {
     const data = python('pipeline_smoke', {});
     eq(data.status, 0);
     eq(data.bookCount, 6);
-    deepEq(data.stages, ['tanakh', 'mishnah', 'talmud', 'halakhah', 'musar']);
+    deepEq(data.stages, ['tanakh', 'mishnah', 'talmud', 'halakhah', 'musar', 'siddur']);
     assert(data.books.indexOf('Rashi on Genesis') >= 0, 'nested Tanakh commentary included');
     assert(data.books.indexOf('Mishnah Berakhot') >= 0, 'Mishnah included');
     assert(data.books.indexOf('Mishneh Torah, Repentance') >= 0, 'Rambam included');
@@ -1016,7 +1174,7 @@ async function main() {
       'fs.pickUserFile': () => ({ token: 'bad-pack-token' }),
       'fs.resolveFileUrl': () => ({ __error: true, code: 'error.file_not_found', message: 'missing file' }),
       'storage.set': () => null,
-    });
+    }, { fixture: true });
     const manifest = await e.NS.Data.pickAndUsePack();
     eq(manifest.formatVersion, 1);
     eq(manifest.stats.books, fixtureManifest.stats.books);
@@ -1115,6 +1273,70 @@ async function main() {
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  // ---- Packaging: the full plugin and the Lite edition --------------------
+  group('Packaging (build/pack_plugin.py, build/scope.py)');
+  await test('the Siddur is a build stage: json/Liturgy/Siddur, in the extended library', () => {
+    const out = cp.execFileSync(
+      'python3',
+      [
+        '-c',
+        'import sys, json; sys.path.insert(0, "build"); import scope;' +
+          'print(json.dumps({"globs": scope.STAGE_GLOBS.get("siddur"), "order": scope.STAGE_ORDER,' +
+          '"stage": scope.stage_of_book_dir("json/Liturgy/Siddur/Siddur Ashkenaz/English")}))',
+      ],
+      { cwd: ROOT, encoding: 'utf8' }
+    );
+    const row = JSON.parse(out);
+    deepEq(row.globs, ['json/Liturgy/Siddur']);
+    eq(row.stage, 'siddur');
+    eq(row.order[row.order.length - 1], 'siddur');
+    const build = fs.readFileSync(path.join(ROOT, 'build', 'build_all.sh'), 'utf8');
+    assert(/ALL_STAGES="[^"]*siddur"/.test(build), 'the extended build includes siddur');
+    assert(/CORE_STAGES="tanakh,mishnah,talmud"/.test(build), 'the compact library is unchanged');
+  });
+
+  await test('the full plugin packs as the default; the Lite plugin is a separate, compact-only plugin', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'otz-pack-'));
+    try {
+      const full = path.join(dir, 'full.otzplugin');
+      const lite = path.join(dir, 'lite.otzplugin');
+      const script =
+        'import sys, json, zipfile; z = zipfile.ZipFile(sys.argv[1]); m = json.loads(z.read("manifest.json"));' +
+        'h = z.read("index.html").decode("utf-8");' +
+        'print(json.dumps({"id": m["id"], "name": m["name"], "tab": m["contributes"]["toolTab"]["title"],' +
+        '"items": len(m["contributes"]["startup"]["contextMenuItems"]), "lite": "edition-lite" in h,' +
+        '"files": sorted(z.namelist()), "perms": m["permissions"]}))';
+      cp.execFileSync('python3', [path.join(ROOT, 'build', 'pack_plugin.py'), '--plugin-dir', PLUGIN, '--out', full], { cwd: ROOT });
+      cp.execFileSync('python3', [path.join(ROOT, 'build', 'pack_plugin.py'), '--plugin-dir', PLUGIN, '--edition', 'lite', '--out', lite], { cwd: ROOT });
+      const f = JSON.parse(cp.execFileSync('python3', ['-c', script, full], { encoding: 'utf8' }));
+      const l = JSON.parse(cp.execFileSync('python3', ['-c', script, lite], { encoding: 'utf8' }));
+      eq(f.id, 'org.sefaria.otzaria-english', 'full keeps its id');
+      eq(f.name, 'English');
+      eq(f.lite, false, 'full has no lite marker');
+      eq(f.items, 1, 'full: one context-menu item');
+      eq(l.id, 'org.sefaria.otzaria-english-lite', 'lite has its own id, so both install side by side');
+      eq(l.name, 'English Lite');
+      eq(l.tab, 'English Lite', 'lite tab is named Lite');
+      eq(l.lite, true, 'lite body is marked for the compact-only UI');
+      eq(l.items, 1, 'lite: one context-menu item');
+      deepEq(l.files, f.files, 'same code and data, only the manifest and body marker differ');
+      deepEq(l.perms, f.perms, 'same permissions');
+      const src = fs.readFileSync(path.join(PLUGIN, 'index.html'), 'utf8');
+      assert(src.indexOf('edition-lite') < 0, 'the source plugin is not modified by the lite build');
+      const mf = JSON.parse(fs.readFileSync(path.join(PLUGIN, 'manifest.json'), 'utf8'));
+      eq(mf.id, 'org.sefaria.otzaria-english', 'source manifest unchanged');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  await test('the Lite UI hides the extended-library controls', () => {
+    const css = fs.readFileSync(path.join(PLUGIN, 'css', 'plugin.css'), 'utf8');
+    assert(/\.edition-lite \.full-only\s*\{\s*display:\s*none/.test(css), 'lite hides .full-only');
+    const html = fs.readFileSync(path.join(PLUGIN, 'index.html'), 'utf8');
+    assert(/class="btn-row full-only"/.test(html), 'the import controls are marked full-only');
   });
 
   // ---- Summary ------------------------------------------------------------

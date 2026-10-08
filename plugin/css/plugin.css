@@ -627,3 +627,186 @@ select {
   border-radius: var(--radius-sm);
   margin-bottom: 12px;
 }
+
+/* ---- bars that drag instead of scrolling -------------------------------- */
+
+/* The top-row buttons, the page tabs and the view bar share one rule: when they
+ * do not fit, there is no scroll bar. The mouse drags them (js/app.js:
+ * NS.dragScroll), and the vertical wheel pans them too. */
+.drag-scroll {
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  cursor: grab;
+  user-select: none;
+  -webkit-user-select: none;
+  overscroll-behavior-x: contain;
+}
+
+.drag-scroll::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+.drag-scroll.dragging {
+  cursor: grabbing;
+}
+
+.drag-scroll > * {
+  flex-shrink: 0;
+}
+
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  flex: 0 1 auto;
+  padding: 4px 0;
+}
+
+.tab-sep {
+  flex-shrink: 0;
+  width: 1px;
+  margin: 2px 4px;
+  background: var(--color-outline-variant);
+}
+
+/* ---- English pages (tabs) ------------------------------------------------ */
+
+.page-tabs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 16px;
+  background: var(--color-surface-container);
+  border-bottom: 1px solid var(--color-outline-variant);
+  flex-shrink: 0;
+}
+
+.page-tab {
+  display: flex;
+  align-items: center;
+  max-width: 18rem;
+  font-family: var(--font-ui);
+  font-size: 0.8125rem;
+  color: var(--color-on-surface-variant);
+  background: var(--color-surface-container-low);
+  border: 1px solid var(--color-outline-variant);
+  border-radius: var(--radius-pill);
+}
+
+.page-tab.active {
+  background: var(--color-secondary-container);
+  color: var(--color-on-secondary-container);
+  border-color: var(--color-outline);
+}
+
+.page-tab-label {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  padding: 5px 4px 5px 12px;
+  min-width: 0;
+  max-width: 15rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.page-tab-close {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  border-radius: var(--radius-pill);
+  width: 22px;
+  height: 22px;
+  margin: 0 4px 0 2px;
+  padding: 0;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.page-tab-close:hover {
+  background: var(--color-surface-container-highest);
+}
+
+.page-tab-new {
+  font-family: var(--font-ui);
+  font-size: 0.8125rem;
+  color: var(--color-primary);
+  background: var(--color-surface-container-low);
+  border: 1px dashed var(--color-outline);
+  border-radius: var(--radius-pill);
+  padding: 4px 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+/* ---- split view: the reader on the left, English on the right ----------- */
+
+.app-content.split-mode {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 8px 0 0;
+}
+
+.split-mode #render-host {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.split-wrap {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.split-pane {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow-y: auto;
+  padding: 4px 16px 32px;
+}
+
+.split-he {
+  border-inline-end: 1px solid var(--color-outline-variant);
+}
+
+.split-he-seg {
+  align-items: baseline;
+}
+
+.split-he-section {
+  font-family: var(--font-main);
+  direction: rtl;
+  padding: 8px 0;
+}
+
+/* ---- one plugin, two editions ------------------------------------------- */
+
+/* The Lite build (build/pack_plugin.py --edition lite) has no extended library,
+ * so the controls that import one are not shown. */
+.edition-lite .full-only {
+  display: none;
+}
+
+/* Narrow screens: the two split panes stack instead of sitting side by side. */
+@media (max-width: 700px) {
+  .split-wrap {
+    flex-direction: column;
+  }
+  .split-he {
+    border-inline-end: 0;
+    border-bottom: 1px solid var(--color-outline-variant);
+    flex: 0 0 40%;
+  }
+}

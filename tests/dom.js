@@ -210,7 +210,18 @@ function makeDocument() {
       return new TextNode(text);
     },
     getElementById(id) {
-      return doc._byId[id] || null;
+      if (doc._byId[id]) return doc._byId[id];
+      // Elements the plugin creates and gives an id to are found in the tree.
+      const find = (node) => {
+        if (!node || !node.childNodes) return null;
+        for (const child of node.childNodes) {
+          if (child instanceof Node && child.getAttribute('id') === id) return child;
+          const hit = child instanceof Node ? find(child) : null;
+          if (hit) return hit;
+        }
+        return null;
+      };
+      return find(doc.body);
     },
     register(id, node) {
       node.setAttribute('id', id);
@@ -239,12 +250,13 @@ function makeFixture() {
   const ids = [
     'bar-title',
     'bar-subtitle',
-    'btn-translate',
-    'btn-split',
+    'topbar-actions',
     'btn-reader',
     'btn-follow',
     'btn-options',
+    'page-tabs',
     'view-tabs',
+    'app-content',
     'notice',
     'status',
     'render-host',
@@ -252,15 +264,17 @@ function makeFixture() {
     'panel-options',
     'panel-close',
     'pack-info',
+    'opt-split-default',
     'opt-numbers',
     'opt-order',
     'opt-import',
     'opt-bundled',
   ];
+  // Created by the plugin itself (see js/app.js bindChrome): found by searching the tree.
   ids.forEach((id) => {
     const tag = id === 'opt-order'
       ? 'select'
-      : id === 'opt-numbers'
+      : id === 'opt-numbers' || id === 'opt-split-default'
         ? 'input'
         : 'div';
     const node = document.register(id, new Node(tag));

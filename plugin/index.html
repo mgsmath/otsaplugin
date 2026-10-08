@@ -15,17 +15,11 @@
             <span class="subtitle" id="bar-subtitle"></span>
           </div>
           <span class="bar-title" id="bar-title"></span>
-          <div class="topbar-actions">
-            <button type="button" class="icon-btn" id="btn-translate" title="Translate the current reader location">
-              Translate
-            </button>
-            <button type="button" class="icon-btn" id="btn-split" title="Show Hebrew and English side by side" aria-pressed="false">
-              Split view
-            </button>
+          <div class="topbar-actions drag-scroll" id="topbar-actions">
             <button type="button" class="icon-btn" id="btn-reader" title="Open this text in the reader">
               Reader
             </button>
-            <button type="button" class="icon-btn" id="btn-follow" aria-pressed="false" title="Keep this panel in sync with the reader">
+            <button type="button" class="icon-btn" id="btn-follow" aria-pressed="false" title="Keep the active page in sync with the reader">
               Follow reader
             </button>
             <button type="button" class="icon-btn" id="btn-options" title="Settings" aria-label="Settings">
@@ -34,7 +28,9 @@
           </div>
         </header>
 
-        <nav class="view-tabs" id="view-tabs" aria-label="Translation views"></nav>
+        <nav class="page-tabs drag-scroll" id="page-tabs" aria-label="Open English pages"></nav>
+
+        <nav class="view-tabs drag-scroll" id="view-tabs" aria-label="Translation views"></nav>
 
         <main class="app-content" id="app-content">
           <div id="notice" class="notice-host"></div>
@@ -54,26 +50,30 @@
         </div>
         <div class="panel-body">
           <label class="row">
+            <input type="checkbox" id="opt-split-default" />
+            <span>Open new pages in split view (reader on the left, English on the right)</span>
+          </label>
+          <label class="row">
             <input type="checkbox" id="opt-numbers" />
             <span>Show verse and line numbers</span>
           </label>
           <label class="row">
             <span>Side-by-side order</span>
             <select id="opt-order">
-              <option value="hebrew-first">Hebrew on the right</option>
-              <option value="english-first">English on the right</option>
+              <option value="hebrew-first">Hebrew on the left</option>
+              <option value="english-first">English on the left</option>
             </select>
           </label>
           <div class="row stack">
             <span>Translation data</span>
-            <div class="btn-row">
+            <p class="note" id="pack-info"></p>
+            <div class="btn-row full-only">
               <button type="button" class="btn" id="opt-import">Load an extended .otzenpack library</button>
               <button type="button" class="btn" id="opt-bundled">Use the built-in library</button>
             </div>
-            <p class="note" id="pack-info"></p>
           </div>
           <p class="note">
-            Use the Split view button for Hebrew and English in this panel. To place the plugin in a separate Otzaria split pane, use the tab menu and choose “Show side by side.”
+            Use Split in the view bar for the reader on the left and English on the right. To place the plugin in a separate Otzaria split pane, use the tab menu and choose “Show side by side.”
           </p>
         </div>
       </aside>

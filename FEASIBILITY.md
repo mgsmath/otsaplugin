@@ -7,14 +7,14 @@ a full export checkout or a running Otzaria app.
 
 1. **Plugin page:** Otzaria renders `plugin/index.html` as a `ToolTab`; this is the
    translation reader's primary surface.
-2. **Plugin split view:** the **Split view** button shows Hebrew and English in two
-   columns inside the plugin panel.
+2. **Plugin split view:** the **Split** toggle in the view bar lays the page out with
+   the reader's Hebrew on the left and the English on the right, inside the plugin
+   panel. New pages open split by default (a Settings option).
 3. **Host-app split pane:** Otzaria's `CombinedTab` can place the plugin tab beside
    a reader tab, but that split is user-driven; the plugin SDK does not expose a
    host-level split command. Settings names the host tab-menu action in English.
-4. **Reader context menu:** the manifest contributes two actions—**Translate
-   selected passage** and **Translate side by side**. Both open the plugin with
-   the selected reference; the second selects the built-in two-column view.
+4. **Reader context menu:** the manifest contributes one action, **Translate
+   selected passage**, which opens the selected passage on a new plugin page.
 5. **Follow reader:** **Follow reader** subscribes to
    `reader.current_ref_changed`; turning it on also refreshes from
    `reader.getCurrentRef`. The handler normalizes the known title, id and

@@ -9,13 +9,19 @@ regardless of Otzaria's language setting; Hebrew source text remains right-to-le
 - Five reading layouts: English only, **side by side**, interleaved, flowing,
   and Tap to reveal. Side by side pairs passage with passage: verse 10's English
   is a row with verse 10's Hebrew, all the way down the chapter or daf.
-- A **Translate** button refreshes the current reader location; **Split view**
-  immediately opens the Hebrew/English side-by-side layout.
-- Two reader context-menu actions: **Translate selected passage** and
-  **Translate side by side**. Both show the passage in its whole chapter or daf,
-  scrolled to and outlined, rather than a cut-down window of nearby passages.
-- **Follow reader** refreshes the translation as the current reference changes.
-  **Open in reader** uses the reader's actual book id and reference.
+- **Several English pages.** Each page has its own text, reference, view and
+  split state, shown as a tab. **+ New page** opens the reader's current location
+  on a new page. With **Follow reader** off, every page stays where it was.
+- **Split view** (the **Split** toggle in the view bar, and the default for new
+  pages — see Settings) shows the reader's Hebrew on the left and the English on
+  the right. The English side starts on **English only**.
+- The reader context-menu action **Translate selected passage** opens the passage
+  on a new page. It shows the whole chapter or daf, scrolled to and outlined,
+  rather than a cut-down window of nearby passages.
+- **Follow reader** keeps the active page in step with the reader's current
+  reference. **Reader** opens the page's text in the reader at its reference.
+- The top bar, page tabs and view bar have no scroll bar: when they do not fit,
+  press the mouse on them and drag, or use the wheel.
 - Hebrew alignment failures are handled quietly. The plugin never re-splits an
   uncertain Hebrew match: it uses packed Hebrew where available, pairs verses
   only when Otzaria's text matches the pack letter for letter, and otherwise
@@ -26,7 +32,7 @@ regardless of Otzaria's language setting; Hebrew source text remains right-to-le
 ## Text coverage
 
 The build recursively scans all English-bearing works under the Sefaria export's
-Tanakh, Mishnah, Talmud, Halakhah and Musar sections. This includes Bavli and
+Tanakh, Mishnah, Talmud, Halakhah, Musar and Liturgy/Siddur sections. This includes Bavli and
 Yerushalmi, nested Tanakh and Mishnah commentaries, Mishneh Torah/Rambam,
 Mishnah Berurah, and other Halakhah/Musar texts where eligible English versions
 exist.
@@ -35,7 +41,11 @@ exist.
 
 1. A compact built-in library covering the Tanakh, Mishnah and Talmud sections.
 2. `dist/otsaplugin-extended.otzenpack`, an importable expanded library with the
-   Halakhah, Musar, and nested commentary texts as well.
+   Halakhah, Musar, Siddur (Liturgy/Siddur) and nested commentary texts as well.
+3. `dist/otsaplugin.otzplugin`, the default plugin with the compact library built in.
+4. `dist/otsaplugin-lite.otzplugin`, **English Lite**: the same plugin with only the
+   compact library. It has its own plugin id, so it installs alongside the default
+   one, and its Settings have no extended-library controls.
 
 Install the plugin, then open **Settings → Translation data → Load an extended
 .otzenpack library** and select the expanded file to use the full library. A text
@@ -95,8 +105,9 @@ workflow** cuts one by hand. Details: [docs/RELEASES.md](docs/RELEASES.md).
 
 ## Split-pane note
 
-The plugin's **Split view** button lays the translation panel out one row per
-passage, Hebrew on one side and English on the other. Otzaria's separate
+**Split** lays the page out as two panes: the reader's Hebrew on the left and the
+English on the right, each scrolling on its own. The side-by-side view is still
+one row per passage, Hebrew on one side and English on the other. Otzaria's separate
 `CombinedTab` split-pane layout is controlled
 by the host app's tab menu; the plugin SDK currently does not expose a method to
 create that host-level split automatically. The Settings panel gives the exact

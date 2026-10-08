@@ -154,7 +154,8 @@
     view: null, // last used view; null = per-entry-point default
     viewForContext: null, // { selection: 'sidebyside', reader: 'interleaved' }
     follow: false,
-    order: 'hebrew-first', // 'hebrew-first' | 'english-first'
+    splitNewPages: true, // new pages open in split view: reader on the left, English on the right
+    order: 'hebrew-first', // side-by-side order: 'hebrew-first' (Hebrew left) | 'english-first'
     numbers: true,
     density: 'comfortable', // 'compact' | 'comfortable'
     fontScale: 1,

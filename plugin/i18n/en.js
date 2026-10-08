@@ -9,8 +9,10 @@
   window.TRANSLATIONS.en = {
     'אין חיבור לאוצריא — התצוגה מוצגת ללא נתונים חיים.':
       'Otzaria is not connected. Open the plugin inside Otzaria to load translations.',
-    'אין ספר פתוח בקורא. בחר קטע בטקסט ובחר „תרגום לאנגלית” בתפריט, או פתח ספר בקורא.':
-      'No book is open. Open a text or choose a translation action from the reader menu.',
+    'אין ספר פתוח בקורא. פתח ספר בקורא, או בחר „תרגום לאנגלית” בתפריט הקטע.':
+      'No text is open in the reader. Open a text, or choose “Translate selected passage” from the reader menu.',
+    'אין עמוד פתוח. לחץ על „עמוד חדש” או פתח ספר בקורא.':
+      'No page is open. Choose “+ New page”, or open a text in the reader.',
     'אין תרגום אנגלי לספר זה בחבילה': 'No translation is available in the loaded library for this text.',
     'אין תרגום לקטע זה': 'No translation is available for this passage.',
     'אנגלית': 'English',
@@ -59,5 +61,10 @@
     'שגיאה בטעינה': 'Loading error',
     'תכולת החבילה': 'Available texts',
     'תצוגה לא מוכרת': 'Unknown view',
+    'הקורא משמאל והאנגלית מימין': 'Reader on the left, English on the right',
+    'פיצול': 'Split',
+    'סגור עמוד': 'Close page',
+    'עמוד חדש': 'New page',
+    'פתח עמוד חדש במיקום הנוכחי של הקורא': 'Open a new page at the reader’s current location',
   };
 })();

@@ -154,6 +154,10 @@ def build_notes(args) -> str:
     out.append("#### Assets")
     out.append("")
     out.append(f"- `{plugin_asset}` — the installable plugin, with the compact library built in.")
+    if args.lite_plugin_asset and args.lite_plugin and os.path.exists(args.lite_plugin):
+        lite_name = os.path.basename(args.lite_plugin_asset)
+        out.append(f"- `{lite_name}` — **English Lite**, the same plugin with only the compact "
+                   "library and no extended-library import. Installs alongside the full plugin.")
     if zenpack_attached:
         out.append(f"- `{zenpack_asset}` — the extended library (Halakhah, Musar and nested "
                    "commentaries), imported from the plugin's Settings panel.")
@@ -211,6 +215,10 @@ def main(argv=None) -> int:
     ap.add_argument("--plugin", default=os.path.join("dist", "otsaplugin.otzplugin"))
     ap.add_argument("--plugin-asset", default=None,
                     help="asset name to show readers (default: the --plugin filename)")
+    ap.add_argument("--lite-plugin", default=None,
+                    help="the compact-only Lite .otzplugin, when one is attached")
+    ap.add_argument("--lite-plugin-asset", default=None,
+                    help="asset name of the Lite plugin; omit when it is not attached")
     ap.add_argument("--otzenpack", default=os.path.join("dist", "otsaplugin-extended.otzenpack"))
     ap.add_argument("--otzenpack-asset", default=None,
                     help="asset name of the extended library; omit when it is not attached")

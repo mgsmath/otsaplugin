@@ -108,7 +108,7 @@ jobs:
       - name: Fetch the Sefaria export
         run: ./build/fetch_export.sh "$EXPORT_ROOT"
 
-      - name: Build both libraries (pipeline, otzenpack, icon, pack)
+      - name: Build both libraries and the plugins (pipeline, otzenpack, icon, pack)
         run: ./build/build_all.sh "$EXPORT_ROOT" --no-tests
 
       - name: Validate the packed plugin
@@ -144,6 +144,14 @@ jobs:
           ZENPACK=""
           mkdir -p dist/release
           cp dist/otsaplugin.otzplugin "dist/release/otsaplugin-$TAG.otzplugin"
+          # The compact-only Lite plugin: same code, its own id, installs alongside.
+          LITE=""
+          if [ -f dist/otsaplugin-lite.otzplugin ]; then
+            cp dist/otsaplugin-lite.otzplugin "dist/release/otsaplugin-$TAG-lite.otzplugin"
+            LITE="otsaplugin-$TAG-lite.otzplugin"
+          else
+            echo "::warning::the build produced no Lite plugin"
+          fi
           if [ -f dist/otsaplugin-extended.otzenpack ]; then
             SIZE="$(stat -c %s dist/otsaplugin-extended.otzenpack)"
             if [ "$SIZE" -le "$LIMIT" ]; then
@@ -165,6 +173,7 @@ jobs:
           ( cd dist/release && sha256sum -- * > SHA256SUMS.txt )
           ls -l dist/release
           echo "otzenpack_asset=$ZENPACK" >> "$GITHUB_OUTPUT"
+          echo "lite_asset=$LITE" >> "$GITHUB_OUTPUT"
 
       - name: Write the release notes
         run: |
@@ -194,6 +203,8 @@ jobs:
             --headline "$HEADLINE" \
             --plugin "dist/release/otsaplugin-$TAG.otzplugin" \
             --plugin-asset "otsaplugin-$TAG.otzplugin" \
+            --lite-plugin dist/release/otsaplugin-$TAG-lite.otzplugin \
+            --lite-plugin-asset "${{ steps.assets.outputs.lite_asset }}" \
             --otzenpack dist/otsaplugin-extended.otzenpack \
             --otzenpack-asset "${{ steps.assets.outputs.otzenpack_asset }}" \
             --reports-asset "otsaplugin-$TAG-reports.zip" \

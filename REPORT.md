@@ -7,7 +7,7 @@ workspace.
 
 ## Verified by running in this workspace
 
-- **JavaScript tests:** `node tests/run_tests.js` — **135 passed, 0 failed**. The
+- **JavaScript tests:** `node tests/run_tests.js` — **146 passed, 0 failed**. The
   suite loads the shipped runtime in a Node VM and uses a small in-memory pack
   when generated `plugin/data/` files are absent.
 - **Python syntax:** `python3 -m py_compile build/*.py tests/py_bridge.py` passes.
@@ -21,7 +21,9 @@ workspace.
   12-digit footer. The runtime importer successfully reads a generated fixture
   `.otzenpack`, loads its manifest, then loads a work chunk.
 - **Reader/UI behavior:** tests cover the English/LTR interface under a Hebrew
-  host locale; Translate, Split view and Reader actions; passage-by-passage
+  host locale; several pages with their own content; split view (reader left,
+  English right) and its default; Reader and Follow reader; drag-to-scroll bars
+  without scroll bars; the Lite edition's manifest and packaging; passage-by-passage
   pairing in the side-by-side layout; context-menu translation of a selected
   passage; Follow reader with multiple SDK payload spellings; and silent Hebrew
   fallback with no letter-sequence-mismatch warning.

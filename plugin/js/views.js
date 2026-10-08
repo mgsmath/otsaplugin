@@ -293,6 +293,44 @@
     ctx.host.appendChild(list);
   };
 
+  /**
+   * Split view: the reader's Hebrew on the left, the English on the right, using
+   * the page's view for the English side. Each pane scrolls on its own, so both
+   * sides stay reachable; scrolling to a passage moves both (see NS.scrollToSegment).
+   */
+  Views.split = function (ctx) {
+    var wrap = el('div', 'split-wrap');
+    var he = el('div', 'split-pane split-he');
+    var en = el('div', 'split-pane split-en');
+    en.dir = 'ltr';
+    Views.hebrewPane(ctx, he);
+    var renderer = Views[ctx.view] || Views.english;
+    renderer(Object.assign({}, ctx, { host: en }));
+    wrap.appendChild(he);
+    wrap.appendChild(en);
+    ctx.host.appendChild(wrap);
+  };
+
+  /** The reader's Hebrew for a unit: passage by passage when aligned, else one block. */
+  Views.hebrewPane = function (ctx, pane) {
+    if (ctx.unit.al !== 1) {
+      var section = el('div', 'split-he-section');
+      section.dir = 'rtl';
+      var sectionHebrew = ctx.hebrew && ctx.hebrew.length ? ctx.hebrew : (ctx.unit.h || []);
+      section.appendChild(el('span', 'seg-he-text', sectionHebrew.join(' ')));
+      pane.appendChild(section);
+    }
+    var aligned = ctx.unit.al === 1;
+    for (var i = ctx.from; i < ctx.to; i++) {
+      var row = el('div', 'seg split-he-seg');
+      row.dir = 'rtl';
+      row.dataset.index = String(i);
+      if (ctx.options.numbers) row.appendChild(numberChip(address(ctx, i)));
+      if (aligned) row.appendChild(el('span', 'seg-he-text', hebrewFor(ctx, i)));
+      pane.appendChild(row);
+    }
+  };
+
   Views.LIST = ['english', 'sidebyside', 'interleaved', 'flowing', 'reveal'];
 
   Views.label = function (view) {

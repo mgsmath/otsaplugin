@@ -21,9 +21,10 @@ workspace.
   12-digit footer. The runtime importer successfully reads a generated fixture
   `.otzenpack`, loads its manifest, then loads a work chunk.
 - **Reader/UI behavior:** tests cover the English/LTR interface under a Hebrew
-  host locale; Translate, Split view and Reader actions; context-menu Peek;
-  Follow reader with multiple SDK payload spellings; and silent Hebrew fallback
-  with no letter-sequence-mismatch warning.
+  host locale; Translate, Split view and Reader actions; passage-by-passage
+  pairing in the side-by-side layout; context-menu translation of a selected
+  passage; Follow reader with multiple SDK payload spellings; and silent Hebrew
+  fallback with no letter-sequence-mismatch warning.
 - **No visible credits UI:** tests confirm passage rendering and `index.html` do
   not show a credits/licence/source-list browser. Pack provenance remains in
   internal data metadata.

@@ -1,4 +1,4 @@
-/* otsaplugin — the six reader views.
+/* otsaplugin — the five reader views.
  *
  * Every renderer receives the same `ctx` and writes into `ctx.host`. Pack text
  * is rendered with createTextNode or the HTML allow-list in sanitize.js.
@@ -101,83 +101,100 @@
     ctx.host.appendChild(list);
   };
 
-  /** 2. Side by side, aligned per segment when the text permits it. */
+  /**
+   * 2. Side by side: one grid row per passage, Hebrew on one side, English on
+   * the other.
+   *
+   * The row is what gets laid out — the headings and every passage are rows of
+   * the same grid — so the two cells of a row are one line of the page and share
+   * its height. Passage N is therefore always the English of passage N beside
+   * the Hebrew of passage N. Stacking two independent columns instead let each
+   * side grow at its own pace: the further down the chapter the reader went, the
+   * further the English drifted from the verse it translates, until the pairing
+   * could only be guessed at by eye.
+   */
   Views.sidebyside = function (ctx) {
+    var englishFirst = ctx.options.order === 'english-first';
     var wrap = el('div', 'sbs');
     var grid = el('div', 'sbs-grid');
-    grid.classList.add(ctx.options.order === 'english-first' ? 'order-en' : 'order-he');
-    var heCol = el('div', 'sbs-col sbs-he');
-    var enCol = el('div', 'sbs-col sbs-en');
-    heCol.dir = 'rtl';
-    enCol.dir = 'ltr';
-    heCol.appendChild(el('div', 'sbs-head', NS.t('עברית')));
-    enCol.appendChild(el('div', 'sbs-head', NS.t('אנגלית')));
+    grid.classList.add(englishFirst ? 'order-en' : 'order-he');
 
-    if (ctx.unit.al !== 1) {
-      Views.sectionColumns(ctx, heCol, enCol);
-      grid.appendChild(ctx.options.order === 'english-first' ? enCol : heCol);
-      grid.appendChild(ctx.options.order === 'english-first' ? heCol : enCol);
-      wrap.appendChild(grid);
-      ctx.host.appendChild(wrap);
-      return;
+    var headRow = el('div', 'sbs-row sbs-headrow');
+    headRow.appendChild(el('div', 'sbs-head', englishFirst ? NS.t('אנגלית') : NS.t('עברית')));
+    headRow.appendChild(el('div', 'sbs-head', englishFirst ? NS.t('עברית') : NS.t('אנגלית')));
+    grid.appendChild(headRow);
+
+    if (ctx.unit.al === 1) {
+      for (var i = ctx.from; i < ctx.to; i++) {
+        grid.appendChild(sbsSegmentRow(ctx, i, englishFirst));
+      }
+    } else {
+      // No confirmed per-passage Hebrew pairing: one row holding the whole
+      // section, so the two sides still start together and stay together.
+      grid.appendChild(sbsSectionRow(ctx, englishFirst));
     }
 
-    for (var i = ctx.from; i < ctx.to; i++) {
-      var hRow = el('div', 'sbs-row');
-      hRow.dataset.index = String(i);
-      if (ctx.options.numbers) hRow.appendChild(numberChip(address(ctx, i)));
-      hRow.appendChild(el('span', 'seg-he-text', hebrewFor(ctx, i)));
-      heCol.appendChild(hRow);
-
-      var eRow = el('div', 'sbs-row');
-      eRow.dataset.index = String(i);
-      if (ctx.options.numbers) eRow.appendChild(numberChip(address(ctx, i)));
-      englishBody(eRow, ctx.unit.e[i] || '', i, ctx);
-      enCol.appendChild(eRow);
-
-      (function (idx, a, b) {
-        function on() {
-          a.classList.add('hl');
-          b.classList.add('hl');
-        }
-        function off() {
-          a.classList.remove('hl');
-          b.classList.remove('hl');
-        }
-        a.addEventListener('mouseenter', on);
-        a.addEventListener('mouseleave', off);
-        b.addEventListener('mouseenter', on);
-        b.addEventListener('mouseleave', off);
-        a.addEventListener('click', function () {
-          NS.focusSegment(ctx, idx);
-        });
-        b.addEventListener('click', function () {
-          NS.focusSegment(ctx, idx);
-        });
-      })(i, hRow, eRow);
-    }
-    grid.appendChild(ctx.options.order === 'english-first' ? enCol : heCol);
-    grid.appendChild(ctx.options.order === 'english-first' ? heCol : enCol);
     wrap.appendChild(grid);
     ctx.host.appendChild(wrap);
   };
 
-  /** Section-level columns used when a 1:1 Hebrew alignment is unavailable. */
-  Views.sectionColumns = function (ctx, heCol, enCol) {
-    var he = el('div', 'sbs-row section-level');
-    he.dir = 'rtl';
+  function sbsCell(cls, dir) {
+    var cell = el('div', 'sbs-cell ' + cls);
+    cell.dir = dir;
+    return cell;
+  }
+
+  /** One passage: its Hebrew cell and its English cell, as a single row. */
+  function sbsSegmentRow(ctx, i, englishFirst) {
+    var row = el('div', 'sbs-row');
+    row.dataset.index = String(i);
+
+    var he = sbsCell('sbs-he', 'rtl');
+    if (ctx.options.numbers) he.appendChild(numberChip(address(ctx, i)));
+    he.appendChild(el('span', 'seg-he-text', hebrewFor(ctx, i)));
+
+    var en = sbsCell('sbs-en', 'ltr');
+    if (ctx.options.numbers) en.appendChild(numberChip(address(ctx, i)));
+    englishBody(en, ctx.unit.e[i] || '', i, ctx);
+
+    row.appendChild(englishFirst ? en : he);
+    row.appendChild(englishFirst ? he : en);
+    sbsLink(ctx, row, i);
+    return row;
+  }
+
+  /** Whole section as one row, used when a 1:1 Hebrew alignment is unavailable. */
+  function sbsSectionRow(ctx, englishFirst) {
+    var row = el('div', 'sbs-row section-level');
+
+    var he = sbsCell('sbs-he', 'rtl');
     var heText = ctx.hebrew && ctx.hebrew.length ? ctx.hebrew.join(' ') : (ctx.unit.h || []).join(' ');
     he.appendChild(el('span', 'seg-he-text', heText));
-    heCol.appendChild(he);
-    var en = el('div', 'sbs-row section-level');
-    en.dir = 'ltr';
+
+    var en = sbsCell('sbs-en', 'ltr');
     for (var i = ctx.from; i < ctx.to; i++) {
-      var s = el('div', 'flow-seg');
-      englishBody(s, ctx.unit.e[i] || '', i, ctx);
-      en.appendChild(s);
+      var seg = el('div', 'flow-seg');
+      englishBody(seg, ctx.unit.e[i] || '', i, ctx);
+      en.appendChild(seg);
     }
-    enCol.appendChild(en);
-  };
+
+    row.appendChild(englishFirst ? en : he);
+    row.appendChild(englishFirst ? he : en);
+    return row;
+  }
+
+  /** Hovering or clicking either half acts on the passage as a whole. */
+  function sbsLink(ctx, row, i) {
+    row.addEventListener('mouseenter', function () {
+      row.classList.add('hl');
+    });
+    row.addEventListener('mouseleave', function () {
+      row.classList.remove('hl');
+    });
+    row.addEventListener('click', function () {
+      NS.focusSegment(ctx, i);
+    });
+  }
 
   /** 3. Interleaved: Hebrew segment, English directly beneath. */
   Views.interleaved = function (ctx) {
@@ -227,32 +244,7 @@
     ctx.host.appendChild(flow);
   };
 
-  /** 5. Peek: the selected passage plus/minus N segments of context. */
-  Views.peek = function (ctx) {
-    var list = el('div', 'peek');
-    for (var i = ctx.from; i < ctx.to; i++) {
-      var block = el('div', 'peek-block');
-      block.dataset.index = String(i);
-      if (i === ctx.focus) block.classList.add('focus');
-      var head = el('div', 'peek-head');
-      head.appendChild(numberChip(address(ctx, i)));
-      block.appendChild(head);
-      if (ctx.unit.al === 1) {
-        var heLine = el('div', 'peek-he');
-        heLine.dir = 'rtl';
-        heLine.appendChild(el('span', 'seg-he-text', hebrewFor(ctx, i)));
-        block.appendChild(heLine);
-      }
-      var enLine = el('div', 'peek-en');
-      enLine.dir = 'ltr';
-      englishBody(enLine, ctx.unit.e[i] || '', i, ctx);
-      block.appendChild(enLine);
-      list.appendChild(block);
-    }
-    ctx.host.appendChild(list);
-  };
-
-  /** 6. Tap to reveal: Hebrew with the English hidden until tapped. */
+  /** 5. Tap to reveal: Hebrew with the English hidden until tapped. */
   Views.reveal = function (ctx) {
     var list = el('div', 'reveal');
     var aligned = ctx.unit.al === 1;
@@ -301,7 +293,7 @@
     ctx.host.appendChild(list);
   };
 
-  Views.LIST = ['english', 'sidebyside', 'interleaved', 'flowing', 'peek', 'reveal'];
+  Views.LIST = ['english', 'sidebyside', 'interleaved', 'flowing', 'reveal'];
 
   Views.label = function (view) {
     switch (view) {
@@ -313,8 +305,6 @@
         return NS.t('משולב');
       case 'flowing':
         return NS.t('רצף');
-      case 'peek':
-        return NS.t('הצצה');
       case 'reveal':
         return NS.t('לחיצה לחשיפה');
       default:

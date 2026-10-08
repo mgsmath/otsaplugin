@@ -612,7 +612,7 @@ async function main() {
   });
 
   // ---- Views --------------------------------------------------------------
-  group('The six views render loaded pack data');
+  group('The five views render loaded pack data');
   const viewEnv = loadPlugin({
     'reader.getCurrentRef': () => ({ bookId: 'בראשית', ref: 'פרק א, פסוק ג', index: 0 }),
     'reader.getSectionTextMap': () => ({ __error: true, code: 'error.unsupported' }),
@@ -655,13 +655,53 @@ async function main() {
     eq(rows[0].querySelectorAll('.seg-he-text').length, 0, 'no unconfirmed per-passage Hebrew pairing');
     eq(host.querySelectorAll('.reveal-section').length, 1, 'single section-level Hebrew line');
   });
-  await test('peek shows a window around the focus, not the whole chapter', async () => {
-    viewEnv.NS.settings.revealContext = 1;
-    viewEnv.NS.App.setView('peek');
+  await test('side by side pairs every passage with its own Hebrew and English line', async () => {
+    const chunk = await viewEnv.NS.Data.book('Genesis');
+    const unit = chunk.units[0];
+    viewEnv.NS.App.setView('sidebyside');
     await new Promise((r) => setTimeout(r, 60));
     const host = viewEnv.fixture.document.getElementById('render-host');
-    const blocks = host.querySelectorAll('.peek-block');
-    eq(blocks.length, 3, 'focus ±1');
+
+    // One row per passage, each holding both languages: the row is the layout
+    // unit, so a passage's English cannot drift away from its Hebrew.
+    const rows = host
+      .querySelectorAll('.sbs-row')
+      .filter((row) => row.dataset.index !== undefined);
+    eq(rows.length, unit.e.length, 'every passage of the chapter, none repeated');
+    eq(host.querySelectorAll('.sbs-col').length, 0, 'no independent columns to drift apart');
+
+    for (let i = 0; i < rows.length; i++) {
+      const he = rows[i].querySelectorAll('.sbs-he');
+      const en = rows[i].querySelectorAll('.sbs-en');
+      eq(he.length, 1, 'row ' + i + ' holds one Hebrew cell');
+      eq(en.length, 1, 'row ' + i + ' holds one English cell');
+      assert(he[0].textContent.indexOf(unit.h[i]) >= 0, 'row ' + i + ' Hebrew: ' + he[0].textContent);
+      assert(en[0].textContent.indexOf(unit.e[i]) >= 0, 'row ' + i + ' English: ' + en[0].textContent);
+      eq(
+        he[0].querySelectorAll('.seg-num')[0].textContent,
+        en[0].querySelectorAll('.seg-num')[0].textContent,
+        'both sides of row ' + i + ' carry the same verse number'
+      );
+    }
+  });
+  await test('the side-by-side row is laid out as the two-column unit', () => {
+    const css = fs.readFileSync(path.join(PLUGIN, 'css', 'plugin.css'), 'utf8');
+    const rule = /\.sbs-row\s*\{([^}]*)\}/.exec(css);
+    assert(rule, 'the stylesheet has a .sbs-row rule');
+    assert(
+      /grid-template-columns\s*:\s*minmax\(0,\s*1fr\)\s+minmax\(0,\s*1fr\)/.test(rule[1]),
+      'the row lays out both languages itself: ' + rule[1]
+    );
+  });
+  await test('the at-a-glance windowed view is gone', () => {
+    eq(viewEnv.NS.Views.peek, undefined, 'no windowed renderer');
+    assert(viewEnv.NS.Views.LIST.indexOf('peek') < 0, 'not offered as a view: ' + viewEnv.NS.Views.LIST);
+    const html = fs.readFileSync(path.join(PLUGIN, 'index.html'), 'utf8');
+    assert(!/peek/i.test(html), 'no leftover peek setting in the settings panel');
+    const css = fs.readFileSync(path.join(PLUGIN, 'css', 'plugin.css'), 'utf8');
+    assert(!/\.peek-/.test(css), 'no dead peek styles');
+    const dict = viewEnv.sandbox.window.TRANSLATIONS.en;
+    assert(!Object.prototype.hasOwnProperty.call(dict, 'הצצה'), 'no orphan label for the removed view');
   });
   await test('reader views do not display credits, licences, or source lists', async () => {
     viewEnv.NS.App.setView('english');
@@ -680,7 +720,7 @@ async function main() {
     eq(e.NS.lang, 'en');
     eq(e.NS.dir, 'ltr');
     eq(e.NS.Views.label('sidebyside'), 'Side by side');
-    eq(e.NS.Views.label('peek'), 'Peek');
+    eq(e.NS.Views.label('reveal'), 'Tap to reveal');
   });
   await test('every UI string has an English translation', () => {
     const dict = viewEnv.sandbox.window.TRANSLATIONS.en;
@@ -725,7 +765,7 @@ async function main() {
     const host = e.fixture.document.getElementById('render-host');
     assert(host.querySelectorAll('.empty').length > 0, 'empty state shown');
   });
-  await test('a context-menu click opens Peek with the selection', async () => {
+  await test('a context-menu click shows the selected passage in its whole chapter', async () => {
     const e = loadPlugin({
       'reader.getCurrentRef': () => null,
       'reader.getSectionTextMap': () => ({ __error: true, code: 'error.unsupported' }),
@@ -742,9 +782,14 @@ async function main() {
     });
     await new Promise((r) => setTimeout(r, 80));
     const host = e.fixture.document.getElementById('render-host');
-    const blocks = host.querySelectorAll('.peek-block');
-    assert(blocks.length > 0, 'peek rendered, got ' + host.textContent.slice(0, 80));
-    assert(blocks.length < 31, 'windowed, not the whole chapter: ' + blocks.length);
+    eq(host.querySelectorAll('.sbs-grid').length, 1, 'the paired layout by default');
+    const rows = host
+      .querySelectorAll('.sbs-row')
+      .filter((row) => row.dataset.index !== undefined);
+    eq(rows.length, 4, 'the whole chapter, not a few passages around the selection');
+    const marked = host.querySelectorAll('.focused');
+    eq(marked.length, 1, 'the selected passage is the one marked');
+    eq(marked[0].dataset.index, '3', 'and it is the passage the reader had selected');
   });
   await test('the split context-menu action opens a side-by-side translation', async () => {
     const e = loadPlugin({
@@ -765,6 +810,12 @@ async function main() {
     const items = mf.contributes.startup.contextMenuItems;
     eq(items.length, 2);
     assert(items.every((item) => !/[א-ת]/.test(item.title)), 'context menu labels are English');
+    // The param strings the manifest declares are exactly the ones app.js reads.
+    const app = fs.readFileSync(path.join(PLUGIN, 'js', 'app.js'), 'utf8');
+    eq(items[0].param, 'selection');
+    eq(items[1].param, 'split');
+    assert(app.indexOf("payload.param === 'split'") >= 0, 'the split param is handled');
+    assert(!/['"]peek['"]/.test(app), 'no stale peek param left in the controller');
   });
   await test('Follow reader button enables updates from normalized reader events', async () => {
     const e = loadPlugin({
@@ -871,7 +922,8 @@ async function main() {
     assert(!/[א-ת]/.test(html), 'static interface and settings contain no Hebrew labels');
     eq(e.fixture.document.getElementById('btn-follow').textContent, 'Follow reader');
     const labels = e.fixture.document.getElementById('view-tabs').textContent;
-    assert(labels.indexOf('Side by side') >= 0 && labels.indexOf('Peek') >= 0, labels);
+    assert(labels.indexOf('Side by side') >= 0, labels);
+    assert(labels.indexOf('Peek') < 0, 'the windowed view is no longer offered: ' + labels);
   });
 
   // ---- Schema / stage mapping (Python) ------------------------------------

@@ -267,7 +267,7 @@ body {
 
 .seg-en-body,
 .flow-seg,
-.peek-en,
+.sbs-en,
 .ilv-en,
 .reveal-en,
 .english-only .seg {
@@ -292,15 +292,24 @@ body {
 
 /* ---- side by side -------------------------------------------------------- */
 
-.sbs-grid {
+/* Each row is a two-column grid of its own: one passage per row, Hebrew in one
+ * cell and English in the other. The row — not the column — is the layout unit,
+ * so the pair shares a line and a height and cannot drift apart down the page. */
+.sbs-row {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 16px;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  column-gap: 16px;
   align-items: start;
+  padding: 4px 0;
 }
 
-.sbs-col {
+.sbs-cell {
   min-width: 0;
+}
+
+/* The headings are a row of the same grid, so each label sits over its column. */
+.sbs-headrow {
+  padding-top: 0;
 }
 
 .sbs-head {
@@ -316,22 +325,18 @@ body {
   background: var(--color-surface);
 }
 
-.sbs-row {
-  display: flex;
-  gap: 8px;
-  padding: 4px 0;
-  align-items: baseline;
-}
-
 .seg-he-text {
   font-family: var(--font-main);
   direction: rtl;
   unicode-bidi: plaintext;
 }
 
+/* Too narrow for two readable columns: stack each passage instead — still one
+ * row per passage, so the English stays next to the Hebrew it translates. */
 @media (max-width: 700px) {
-  .sbs-grid {
-    grid-template-columns: 1fr;
+  .sbs-row {
+    grid-template-columns: minmax(0, 1fr);
+    row-gap: 4px;
   }
 }
 
@@ -367,29 +372,6 @@ body {
 
 .flow-seg .seg-num {
   margin-inline-end: 4px;
-}
-
-/* ---- peek ---------------------------------------------------------------- */
-
-.peek-block {
-  padding: 10px 12px;
-  margin-bottom: 10px;
-  border-radius: var(--radius-md);
-  background: var(--color-surface-container-low);
-}
-
-.peek-block.focus {
-  background: var(--color-primary-container);
-  color: var(--color-on-primary-container);
-}
-
-.peek-head {
-  margin-bottom: 6px;
-}
-
-.peek-he {
-  font-family: var(--font-main);
-  margin-bottom: 6px;
 }
 
 /* ---- tap to reveal ------------------------------------------------------- */
